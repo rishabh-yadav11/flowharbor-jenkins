@@ -1,2 +1,23 @@
+# =============================================================================
+# terraform.tfvars.example — FlowHarbor Variable Values (Template)
+# =============================================================================
+# Copy this file to terraform.tfvars and replace the placeholder values with
+# your actual domain and hosted zone information.
+#
+# Usage:
+#   cp terraform.tfvars.example terraform.tfvars
+#   # Edit terraform.tfvars with your values
+#   terraform plan
+#   terraform apply
+# =============================================================================
+
+# The root domain you own and manage in Route53 (e.g., "example.com").
 domain_name    = "flowharbor.in"
+
+# Your Route53 hosted zone ID. Find it in the AWS Route53 console under
+# "Hosted zones" — it looks like "Z123456789EXAMPLE".
 hosted_zone_id = "Z123456789EXAMPLE"
+
+# Toggle CloudFront CDN for production. Set to false to route traffic directly
+# to the ALB (useful for debugging or reducing costs during development).
+# enable_cloudfront = false

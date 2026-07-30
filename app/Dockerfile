@@ -1,9 +1,18 @@
-FROM nginx:alpine
-ARG BUILD_NUMBER=0
-ENV BUILD_NUMBER=${BUILD_NUMBER}
-RUN apk add --no-cache envsubst
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY index.html /usr/share/nginx/html/index.html
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=80
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+EXPOSE 80
 CMD ["/entrypoint.sh"]
