@@ -51,3 +51,14 @@ variable "vpc_cidr" {
   type        = string
   default     = "10.0.0.0/16"
 }
+
+# ---- CloudFront Toggle -------------------------------------------------------
+# Controls whether a CloudFront CDN distribution is placed in front of the ALB
+# for production traffic. When enabled, the root domain (flowharbor.in) routes
+# through CloudFront. When disabled, it routes directly to the ALB.
+# Disabling this can simplify debugging and reduce costs during development.
+variable "enable_cloudfront" {
+  description = "Toggle CloudFront CDN for production traffic (true = enabled, false = disabled)"
+  type        = bool
+  default     = false
+}

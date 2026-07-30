@@ -24,12 +24,20 @@ variable "alb_zone_id" {
   type        = string
 }
 
+variable "enable_cloudfront" {
+  description = "Toggle CloudFront CDN routing for the root domain"
+  type        = bool
+  default     = true
+}
+
 variable "cloudfront_domain_name" {
   description = "CloudFront distribution domain name — used for the root domain alias record"
   type        = string
+  default     = ""
 }
 
 variable "cloudfront_zone_id" {
   description = "CloudFront hosted zone ID — required for CloudFront alias records (always Z2FDTNDATAQYW2)"
   type        = string
+  default     = ""
 }

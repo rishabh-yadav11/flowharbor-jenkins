@@ -24,7 +24,7 @@ resource "aws_route53_record" "jenkins" {
   alias {
     name                   = var.alb_dns_name
     zone_id                = var.alb_zone_id
-    evaluate_target_health = true   # Only route to healthy ALB targets
+    evaluate_target_health = true # Only route to healthy ALB targets
   }
 }
 
@@ -59,17 +59,24 @@ resource "aws_route53_record" "staging" {
 }
 
 # ---- Root Domain (Production) -----------------------------------------------
-# flowharbor.in routes to CloudFront (not directly to the ALB). CloudFront
-# sits in front of the ALB to provide CDN caching, edge TLS termination, and
+# When CloudFront is enabled: flowharbor.in routes through CloudFront, which
+# forwards to the ALB. This provides CDN caching, edge TLS termination, and
 # DDoS protection.
+# When CloudFront is disabled: flowharbor.in routes directly to the ALB.
+locals {
+  root_alias_name    = var.enable_cloudfront ? var.cloudfront_domain_name : var.alb_dns_name
+  root_alias_zone_id = var.enable_cloudfront ? var.cloudfront_zone_id : var.alb_zone_id
+  root_health_check  = var.enable_cloudfront ? false : true
+}
+
 resource "aws_route53_record" "root" {
   zone_id = var.hosted_zone_id
-  name    = var.domain_name           # Root domain (e.g., flowharbor.in)
+  name    = var.domain_name
   type    = "A"
 
   alias {
-    name                   = var.cloudfront_domain_name
-    zone_id                = var.cloudfront_zone_id
-    evaluate_target_health = false    # CloudFront doesn't support health checks in aliases
+    name                   = local.root_alias_name
+    zone_id                = local.root_alias_zone_id
+    evaluate_target_health = local.root_health_check
   }
 }

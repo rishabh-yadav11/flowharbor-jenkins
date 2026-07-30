@@ -38,8 +38,8 @@ output "alb_dns_name" {
 }
 
 output "cloudfront_domain_name" {
-  description = "CloudFront distribution domain name — the CDN's AWS-assigned hostname"
-  value       = module.cloudfront.domain_name
+  description = "CloudFront distribution domain name — the CDN's AWS-assigned hostname (null when CloudFront is disabled)"
+  value       = var.enable_cloudfront ? module.cloudfront[0].domain_name : null
 }
 
 # ---- Container Registry -----------------------------------------------------

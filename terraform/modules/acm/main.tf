@@ -20,7 +20,7 @@
 terraform {
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
+      source                = "hashicorp/aws"
       configuration_aliases = [aws.us_east_1]
     }
   }
@@ -31,7 +31,7 @@ terraform {
 # It includes both the root domain and a wildcard for all subdomains
 # (jenkins.*, testing.*, staging.*).
 resource "aws_acm_certificate" "alb" {
-  domain_name               = var.domain_name         # flowharbor.in
+  domain_name               = var.domain_name          # flowharbor.in
   subject_alternative_names = ["*.${var.domain_name}"] # *.flowharbor.in
   validation_method         = "DNS"                    # Validate via Route53 records
   provider                  = aws                      # Use the default (primary region) provider
@@ -47,7 +47,7 @@ resource "aws_acm_certificate" "alb" {
 resource "aws_acm_certificate" "cloudfront" {
   domain_name       = var.domain_name
   validation_method = "DNS"
-  provider          = aws.us_east_1    # Must be in us-east-1 for CloudFront
+  provider          = aws.us_east_1 # Must be in us-east-1 for CloudFront
 
   tags = {
     Name = "${var.domain_name}-cloudfront-cert"
@@ -72,7 +72,7 @@ resource "aws_route53_record" "alb_validation" {
   type            = each.value.type
   records         = [each.value.record]
   ttl             = 60
-  allow_overwrite = true     # Allow overwriting if records already exist (re-deployment)
+  allow_overwrite = true # Allow overwriting if records already exist (re-deployment)
 }
 
 # ---- DNS Validation Records (CloudFront) ------------------------------------

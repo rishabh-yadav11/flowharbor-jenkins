@@ -15,7 +15,7 @@
 #   7. jenkins_master   — Jenkins master EC2 instance
 #   8. alb              — Application Load Balancer with host-based routing
 #   9. ecs              — Fargate cluster with dev/staging/prod services
-#  10. cloudfront       — CDN distribution in front of ALB
+#  10. cloudfront       — CDN distribution in front of ALB (optional, toggle with enable_cloudfront)
 #  11. route53          — DNS records for all subdomains
 # =============================================================================
 
@@ -112,12 +112,12 @@ module "ecr" {
 #   2. CloudFront certificate — in us-east-1 (CloudFront requirement)
 # Both are validated via DNS (Route53 records).
 module "acm" {
-  source          = "./modules/acm"
-  domain_name     = var.domain_name
-  hosted_zone_id  = var.hosted_zone_id
-  aws_region      = var.aws_region
+  source         = "./modules/acm"
+  domain_name    = var.domain_name
+  hosted_zone_id = var.hosted_zone_id
+  aws_region     = var.aws_region
   providers = {
-    aws         = aws
+    aws           = aws
     aws.us_east_1 = aws.us_east_1
   }
 }
@@ -147,14 +147,14 @@ module "jenkins_slave" {
 # script runs — though the master doesn't strictly depend on the slave, this
 # ordering ensures the slave SSM parameters are available.
 module "jenkins_master" {
-  source                = "./modules/jenkins-master"
-  project_name          = var.project_name
-  subnet_id             = module.vpc.private_subnet_ids[0]
-  security_group_id     = module.security_groups.jenkins_master_sg_id
-  iam_instance_profile  = module.iam.jenkins_instance_profile_name
-  domain_name           = var.domain_name
-  ecr_repository_url    = module.ecr.repository_url
-  depends_on            = [module.jenkins_slave]
+  source               = "./modules/jenkins-master"
+  project_name         = var.project_name
+  subnet_id            = module.vpc.private_subnet_ids[0]
+  security_group_id    = module.security_groups.jenkins_master_sg_id
+  iam_instance_profile = module.iam.jenkins_instance_profile_name
+  domain_name          = var.domain_name
+  ecr_repository_url   = module.ecr.repository_url
+  depends_on           = [module.jenkins_slave]
 }
 
 # =============================================================================
@@ -167,15 +167,15 @@ module "jenkins_master" {
 #   - flowharbor.in         → Production target group
 # TLS is terminated at the ALB using the ACM certificate.
 module "alb" {
-  source              = "./modules/alb"
-  project_name        = var.project_name
-  vpc_id              = module.vpc.vpc_id
-  subnet_ids          = module.vpc.public_subnet_ids
-  security_group_id   = module.security_groups.alb_sg_id
-  certificate_arn     = module.acm.alb_certificate_arn
-  domain_name         = var.domain_name
-  jenkins_target_ip   = module.jenkins_master.private_ip
-  depends_on          = [module.jenkins_master, module.acm]
+  source            = "./modules/alb"
+  project_name      = var.project_name
+  vpc_id            = module.vpc.vpc_id
+  subnet_ids        = module.vpc.public_subnet_ids
+  security_group_id = module.security_groups.alb_sg_id
+  certificate_arn   = module.acm.alb_certificate_arn
+  domain_name       = var.domain_name
+  jenkins_target_ip = module.jenkins_master.private_ip
+  depends_on        = [module.jenkins_master, module.acm]
 }
 
 # =============================================================================
@@ -185,17 +185,17 @@ module "alb" {
 # single task running the nginx container. Each service is associated with
 # its corresponding ALB target group for host-based routing.
 module "ecs" {
-  source                = "./modules/ecs"
-  project_name          = var.project_name
-  private_subnet_ids    = module.vpc.private_subnet_ids
-  ecs_task_sg_id        = module.security_groups.ecs_tasks_sg_id
-  ecr_repository_url    = module.ecr.repository_url
+  source                 = "./modules/ecs"
+  project_name           = var.project_name
+  private_subnet_ids     = module.vpc.private_subnet_ids
+  ecs_task_sg_id         = module.security_groups.ecs_tasks_sg_id
+  ecr_repository_url     = module.ecr.repository_url
   ecs_execution_role_arn = module.iam.ecs_execution_role_arn
-  ecs_task_role_arn     = module.iam.ecs_task_role_arn
-  alb_dev_tg_arn        = module.alb.dev_target_group_arn
-  alb_staging_tg_arn    = module.alb.staging_target_group_arn
-  alb_prod_tg_arn       = module.alb.prod_target_group_arn
-  depends_on            = [module.alb, module.ecr]
+  ecs_task_role_arn      = module.iam.ecs_task_role_arn
+  alb_dev_tg_arn         = module.alb.dev_target_group_arn
+  alb_staging_tg_arn     = module.alb.staging_target_group_arn
+  alb_prod_tg_arn        = module.alb.prod_target_group_arn
+  depends_on             = [module.alb, module.ecr]
 }
 
 # =============================================================================
@@ -206,6 +206,7 @@ module "ecs" {
 # at the edge. Only the root domain (flowharbor.in) goes through CloudFront;
 # testing and staging subdomains go directly to the ALB.
 module "cloudfront" {
+  count           = var.enable_cloudfront ? 1 : 0
   source          = "./modules/cloudfront"
   domain_name     = var.domain_name
   alb_domain_name = module.alb.dns_name
@@ -227,7 +228,7 @@ module "route53" {
   hosted_zone_id         = var.hosted_zone_id
   alb_dns_name           = module.alb.dns_name
   alb_zone_id            = module.alb.zone_id
-  cloudfront_domain_name = module.cloudfront.domain_name
-  cloudfront_zone_id     = module.cloudfront.hosted_zone_id
-  depends_on             = [module.alb, module.cloudfront, module.acm]
+  enable_cloudfront      = var.enable_cloudfront
+  cloudfront_domain_name = var.enable_cloudfront ? module.cloudfront[0].domain_name : ""
+  cloudfront_zone_id     = var.enable_cloudfront ? module.cloudfront[0].hosted_zone_id : ""
 }

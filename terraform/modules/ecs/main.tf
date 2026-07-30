@@ -19,11 +19,11 @@
 # The Fargate cluster that hosts all three environment services.
 # Container Insights provides detailed metrics (CPU, memory, network).
 resource "aws_ecs_cluster" "this" {
-  name = "${var.project_name}-cluster"   # flowharbor-cluster
+  name = "${var.project_name}-cluster" # flowharbor-cluster
 
   setting {
     name  = "containerInsights"
-    value = "enabled"    # Enable detailed performance monitoring
+    value = "enabled" # Enable detailed performance monitoring
   }
 
   tags = {
@@ -36,20 +36,20 @@ resource "aws_ecs_cluster" "this" {
 # Individual environments merge their specific values on top of this base.
 locals {
   container_base = {
-    name  = "app"                # Container name within the task
-    image = "${var.ecr_repository_url}:latest"
-    essential = true             # If this container fails, the task stops
+    name      = "app" # Container name within the task
+    image     = "${var.ecr_repository_url}:latest"
+    essential = true # If this container fails, the task stops
     portMappings = [
       {
-        containerPort = 80       # Next.js listens on port 80
+        containerPort = 80 # Next.js listens on port 80
         protocol      = "tcp"
       }
     ]
     logConfiguration = {
-      logDriver = "awslogs"      # Send logs to CloudWatch Logs
+      logDriver = "awslogs" # Send logs to CloudWatch Logs
       options = {
         "awslogs-region"        = data.aws_region.current.region
-        "awslogs-stream-prefix" = "app"             # Prefix for log streams
+        "awslogs-stream-prefix" = "app" # Prefix for log streams
       }
     }
   }
@@ -66,17 +66,17 @@ locals {
 
 # ---- Dev Task Definition ----------------------------------------------------
 resource "aws_ecs_task_definition" "dev" {
-  family                   = "${var.project_name}-dev"  # flowharbor-dev
+  family                   = "${var.project_name}-dev" # flowharbor-dev
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"                   # Each task gets its own ENI
   cpu                      = "256"                      # 0.25 vCPU
   memory                   = "512"                      # 512 MB RAM
-  execution_role_arn       = var.ecs_execution_role_arn  # For ECR pull + logs
-  task_role_arn            = var.ecs_task_role_arn       # For container AWS API calls
+  execution_role_arn       = var.ecs_execution_role_arn # For ECR pull + logs
+  task_role_arn            = var.ecs_task_role_arn      # For container AWS API calls
 
   runtime_platform {
     operating_system_family = "LINUX"
-    cpu_architecture        = "ARM64"   # Graviton for cost efficiency
+    cpu_architecture        = "ARM64" # Graviton for cost efficiency
   }
 
   # Merge base config with dev-specific values.
@@ -200,13 +200,13 @@ resource "aws_ecs_service" "dev" {
   name            = "${var.project_name}-dev"
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.dev.arn
-  desired_count   = 1                     # Single task for the demo
+  desired_count   = 1 # Single task for the demo
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = var.private_subnet_ids  # Private subnets only
+    subnets          = var.private_subnet_ids # Private subnets only
     security_groups  = [var.ecs_task_sg_id]
-    assign_public_ip = false                   # No public IP needed
+    assign_public_ip = false # No public IP needed
   }
 
   # Register with the dev ALB target group.
@@ -266,17 +266,17 @@ resource "aws_ecs_service" "prod" {
 # Retention is set to 7 days to balance debugging needs with storage costs.
 
 resource "aws_cloudwatch_log_group" "dev" {
-  name = "/ecs/${var.project_name}-dev"
+  name              = "/ecs/${var.project_name}-dev"
   retention_in_days = 7
 }
 
 resource "aws_cloudwatch_log_group" "staging" {
-  name = "/ecs/${var.project_name}-staging"
+  name              = "/ecs/${var.project_name}-staging"
   retention_in_days = 7
 }
 
 resource "aws_cloudwatch_log_group" "prod" {
-  name = "/ecs/${var.project_name}-prod"
+  name              = "/ecs/${var.project_name}-prod"
   retention_in_days = 7
 }
 

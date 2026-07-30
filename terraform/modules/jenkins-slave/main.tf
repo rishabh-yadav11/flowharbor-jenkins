@@ -16,8 +16,8 @@
 # The Jenkins Slave (build agent) instance.
 resource "aws_instance" "this" {
   ami                    = data.aws_ami.ubuntu.id
-  instance_type          = "t4g.medium"    # 2 vCPU, 4 GiB RAM, ARM/Graviton
-  subnet_id              = var.subnet_id   # Private subnet (no public IP)
+  instance_type          = "t4g.medium"  # 2 vCPU, 4 GiB RAM, ARM/Graviton
+  subnet_id              = var.subnet_id # Private subnet (no public IP)
   vpc_security_group_ids = [var.security_group_id]
   iam_instance_profile   = var.iam_instance_profile
 

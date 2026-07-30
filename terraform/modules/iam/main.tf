@@ -197,7 +197,7 @@ resource "aws_iam_role_policy" "ecs_execution_ecr" {
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage"
         ]
-        Resource = "*"    # ECR auth token doesn't support resource-level restrictions
+        Resource = "*" # ECR auth token doesn't support resource-level restrictions
       },
       {
         Effect = "Allow"
@@ -205,7 +205,7 @@ resource "aws_iam_role_policy" "ecs_execution_ecr" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "*"    # Scoped by log group ARN in practice
+        Resource = "*" # Scoped by log group ARN in practice
       }
     ]
   })

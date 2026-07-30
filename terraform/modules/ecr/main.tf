@@ -16,9 +16,9 @@
 # image_tag_mutability = "MUTABLE" allows overwriting tags (e.g., ":latest"),
 # which is important for our CI/CD workflow where every build pushes ":latest".
 resource "aws_ecr_repository" "this" {
-  name                 = "${var.project_name}-app"   # Repository name: flowharbor-app
-  image_tag_mutability = "MUTABLE"                   # Allow overwriting tags
-  force_delete         = true                        # Allow terraform destroy even if images exist
+  name                 = "${var.project_name}-app" # Repository name: flowharbor-app
+  image_tag_mutability = "MUTABLE"                 # Allow overwriting tags
+  force_delete         = true                      # Allow terraform destroy even if images exist
 
   # Automatically scan images for vulnerabilities when they are pushed.
   image_scanning_configuration {
@@ -48,7 +48,7 @@ resource "aws_ecr_lifecycle_policy" "this" {
           countNumber = 10
         }
         action = {
-          type = "expire"     # Delete images exceeding the count
+          type = "expire" # Delete images exceeding the count
         }
       }
     ]

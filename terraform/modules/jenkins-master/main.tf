@@ -22,8 +22,8 @@
 resource "aws_instance" "this" {
   # Ubuntu 24.04 LTS ARM64 AMI (fetched via data source below).
   ami                    = data.aws_ami.ubuntu.id
-  instance_type          = "t4g.medium"    # 2 vCPU, 4 GiB RAM, ARM/Graviton
-  subnet_id              = var.subnet_id   # Private subnet (no public IP)
+  instance_type          = "t4g.medium"  # 2 vCPU, 4 GiB RAM, ARM/Graviton
+  subnet_id              = var.subnet_id # Private subnet (no public IP)
   vpc_security_group_ids = [var.security_group_id]
   iam_instance_profile   = var.iam_instance_profile
 
@@ -64,7 +64,7 @@ data "aws_ami" "ubuntu" {
 
   filter {
     name   = "architecture"
-    values = ["arm64"]           # ARM/Graviton for cost efficiency
+    values = ["arm64"] # ARM/Graviton for cost efficiency
   }
 
   filter {

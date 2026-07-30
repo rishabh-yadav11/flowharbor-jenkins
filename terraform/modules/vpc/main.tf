@@ -25,8 +25,8 @@
 # hosted zones.
 resource "aws_vpc" "this" {
   cidr_block           = var.vpc_cidr
-  enable_dns_hostnames = true   # Assigns DNS hostnames to instances
-  enable_dns_support   = true   # Enables DNS resolution within the VPC
+  enable_dns_hostnames = true # Assigns DNS hostnames to instances
+  enable_dns_support   = true # Enables DNS resolution within the VPC
 
   tags = {
     Name = "${var.project_name}-vpc"
@@ -50,7 +50,7 @@ resource "aws_internet_gateway" "this" {
 # internet access for private subnet resources (to pull Docker images,
 # apt packages, AWS APIs via non-endpoint services, etc.).
 resource "aws_eip" "nat" {
-  domain = "vpc"   # Allocate in the VPC domain (not EC2-Classic)
+  domain = "vpc" # Allocate in the VPC domain (not EC2-Classic)
 
   tags = {
     Name = "${var.project_name}-nat-eip"
@@ -59,7 +59,7 @@ resource "aws_eip" "nat" {
 
 resource "aws_nat_gateway" "this" {
   allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id   # Deploy in the first public subnet
+  subnet_id     = aws_subnet.public[0].id # Deploy in the first public subnet
 
   tags = {
     Name = "${var.project_name}-nat-gw"
@@ -74,10 +74,10 @@ resource "aws_nat_gateway" "this" {
 # (it gets its own DNS name), and nothing else is launched directly in
 # public subnets.
 resource "aws_subnet" "public" {
-  count             = length(var.azs)          # One per AZ
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index)         # 10.0.0.0/24, 10.0.1.0/24
-  availability_zone = var.azs[count.index]
+  count                   = length(var.azs) # One per AZ
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index) # 10.0.0.0/24, 10.0.1.0/24
+  availability_zone       = var.azs[count.index]
   map_public_ip_on_launch = false
 
   tags = {
@@ -93,7 +93,7 @@ resource "aws_subnet" "public" {
 resource "aws_subnet" "private" {
   count             = length(var.azs)
   vpc_id            = aws_vpc.this.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10)   # 10.0.10.0/24, 10.0.11.0/24
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10) # 10.0.10.0/24, 10.0.11.0/24
   availability_zone = var.azs[count.index]
 
   tags = {
@@ -131,7 +131,7 @@ resource "aws_route_table" "private" {
   vpc_id = aws_vpc.this.id
 
   route {
-    cidr_block = "0.0.0.0/0"
+    cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.this.id
   }
 
@@ -176,7 +176,7 @@ resource "aws_vpc_endpoint" "ecr_api" {
   vpc_endpoint_type   = "Interface"
   subnet_ids          = aws_subnet.private[*].id
   security_group_ids  = [aws_security_group.vpce.id]
-  private_dns_enabled = true     # Use private DNS names (api.ecr.*)
+  private_dns_enabled = true # Use private DNS names (api.ecr.*)
 
   tags = {
     Name = "${var.project_name}-ecr-api-vpce"
@@ -273,13 +273,13 @@ resource "aws_security_group" "vpce" {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]   # Only allow traffic from within VPC
+    cidr_blocks = [var.vpc_cidr] # Only allow traffic from within VPC
   }
 
   egress {
     from_port   = 0
     to_port     = 0
-    protocol    = "-1"             # All protocols
+    protocol    = "-1" # All protocols
     cidr_blocks = ["0.0.0.0/0"]
   }
 
