@@ -46,7 +46,7 @@ export function TodoApp() {
     <Card className="w-full max-w-lg">
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle>Todo List</CardTitle>
+          <CardTitle>A Todo List</CardTitle>
           {config && (
             <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold text-white ${envBadge}`}>
               {config.ENV}
