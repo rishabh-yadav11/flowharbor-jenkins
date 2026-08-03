@@ -13,7 +13,7 @@
 #   4. Creates admin password and stores in SSM Parameter Store
 #   5. Configures JNLP slave agent port (50000)
 #   6. Registers the Jenkins Slave node
-#   7. Creates the pipeline job (flowharbor-pipeline)
+#   7. Creates the pipeline jobs (flowharbor-dev, staging, prod)
 #   8. Stores ECR repository URL as a Jenkins credential
 # =============================================================================
 

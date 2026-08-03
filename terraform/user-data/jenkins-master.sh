@@ -19,7 +19,7 @@
 #  10. Slave Port: Sets JNLP agent port to 50000
 #  11. Slave Node: Creates the "jenkins-slave" node via Groovy script
 #  12. Agent Secret: Retrieves the JNLP secret and stores in SSM
-#  13. Pipeline Job: Creates "flowharbor-pipeline" with GitHub SCM
+#  13. Pipeline Jobs: Creates flowharbor-{dev,staging,prod} manual tag-based jobs
 #  14. ECR Credential: Stores ECR repository URL as Jenkins credential
 #
 # Template variables (replaced by Terraform):
@@ -223,17 +223,24 @@ aws ssm put-parameter \
     --overwrite \
     --region "$REGION"
 
-# ---- Create Pipeline Job ----------------------------------------------------
-# Create a Jenkins pipeline job called "flowharbor-pipeline" that:
-#   - Uses GitHub SCM from the repository
-#   - Triggers on pushes to the dev branch
-#   - Uses the Jenkinsfile from the repository root
-# The job definition uses Jenkins Groovy API directly.
-curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
-  -H "Jenkins-Crumb: $CRUMB" \
-  -X POST 'http://localhost:8080/scriptText' \
-  --data-urlencode 'script=import jenkins.model.*;import org.jenkinsci.plugins.workflow.job.WorkflowJob;import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition;import hudson.plugins.git.GitSCM;import hudson.plugins.git.BranchSpec;import hudson.plugins.git.UserRemoteConfig;import com.cloudbees.jenkins.GitHubPushTrigger;def i=Jenkins.getInstance();def jn="flowharbor-pipeline";def ex=i.getItem(jn);if(ex){ex.delete()};def j=new WorkflowJob(i,jn);j.addTrigger(new GitHubPushTrigger());def scm=new GitSCM([new UserRemoteConfig("https://github.com/rishabh-yadav11/flowharbor-jenkins-demo.git",null,null,null)],[new BranchSpec("*/dev")],false,[],null,null,[]);j.setDefinition(new CpsScmFlowDefinition(scm,"Jenkinsfile"));i.add(j,jn);j.save();i.save();println("PIPELINE_CREATED")' \
-  --max-time 10
+# ---- Create Environment Pipeline Jobs ----------------------------------------
+# Create three independent Jenkins pipeline jobs (one per environment):
+#   - flowharbor-dev
+#   - flowharbor-staging
+#   - flowharbor-prod
+# Each job:
+#   - Is triggered MANUALLY only (no GitHub push trigger, no SCM polling)
+#   - Loads the Jenkinsfile from the main branch (Jenkinsfile always current)
+#   - Takes a required GIT_TAG string parameter (the git tag to build/deploy)
+#   - Derives its target environment from the job name suffix
+# The app source tag checkout happens inside the Jenkinsfile itself.
+for env in dev staging prod; do
+  curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
+    -H "Jenkins-Crumb: $CRUMB" \
+    -X POST 'http://localhost:8080/scriptText' \
+    --data-urlencode "script=import jenkins.model.*;import org.jenkinsci.plugins.workflow.job.WorkflowJob;import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition;import hudson.plugins.git.GitSCM;import hudson.plugins.git.BranchSpec;import hudson.plugins.git.UserRemoteConfig;import hudson.model.*;import org.jenkinsci.plugins.workflow.job.properties.*;def i=Jenkins.getInstance();def jn=\"flowharbor-\$\{env}\";def ex=i.getItem(jn);if(ex){ex.delete()};def j=new WorkflowJob(i,jn);j.addProperty(new ParametersDefinitionProperty(new StringParameterDefinition(\"GIT_TAG\",\"\",\"Git tag to build and deploy (e.g. 1.2.3)\")));def scm=new GitSCM([new UserRemoteConfig(\"https://github.com/rishabh-yadav11/flowharbor-jenkins-demo.git\",null,null,null)],[new BranchSpec(\"*/main\")],false,[],null,null,[]);j.setDefinition(new CpsScmFlowDefinition(scm,\"Jenkinsfile\"));i.add(j,jn);j.save();i.save();println(\"JOB_CREATED_\$\{env}\")" \
+    --max-time 10
+done
 
 # ---- Store ECR Repository Credential ----------------------------------------
 # Store the ECR repository URL as a Jenkins "string" credential so the pipeline

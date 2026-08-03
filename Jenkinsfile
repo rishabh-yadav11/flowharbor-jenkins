@@ -1,30 +1,42 @@
 // =============================================================================
-// Jenkinsfile — FlowHarbor CI/CD Pipeline
+// Jenkinsfile — FlowHarbor CI/CD Pipeline (Tag-Based, Per-Environment)
 // =============================================================================
-// This declarative Jenkins pipeline defines the entire build, push, and
-// multi-environment deployment workflow for the FlowHarbor demo application.
+// This declarative Jenkins pipeline builds and deploys the FlowHarbor demo
+// application for a SINGLE environment, selected by the Jenkins job that runs it.
+//
+// Jobs:
+//   flowharbor-dev      → deploys to dev      (https://testing.flowharbor.in)
+//   flowharbor-staging  → deploys to staging  (https://staging.flowharbor.in)
+//   flowharbor-prod     → deploys to prod     (https://flowharbor.in)
+//
+// Trigger: MANUAL only. No SCM polling, no webhooks. A developer runs one of the
+// three jobs and enters the GIT_TAG parameter (the git tag to build and deploy).
 //
 // Pipeline stages (in order):
-//   1. Build         — Docker image build from the application source
-//   2. Push to ECR   — Authenticate with AWS ECR and push image tags
-//   3. Deploy to Dev — Auto-deploy to the dev ECS environment
-//   4. Approve Staging — Manual approval gate (admin-only)
-//   5. Promote to Staging — Deploy the same image to staging
-//   6. Approve Production — Manual approval gate (admin-only)
-//   7. Promote to Production — Deploy to production
+//   1. Checkout Tag — fetch all tags and check out the requested GIT_TAG so the
+//      app source matches the exact released commit (Jenkinsfile is loaded from main).
+//   2. Build         — Docker image build, tagged with GIT_TAG and :latest
+//   3. Push to ECR   — Authenticate with ECR, push both tags, log the digest
+//   4. Deploy        — Register a new ECS task definition revision pinned to the
+//                      GIT_TAG image and trigger a rolling update on this job's env.
 //
-// On success, a summary banner with all promotion details is printed.
-// On abort or failure, the pipeline logs the failing stage.
+// On success, a summary banner with the deployed environment and tag is printed.
 //
 // The `promote()` function encapsulates the logic for registering a new ECS
 // task definition revision and triggering a rolling service update.
 // =============================================================================
 
 // ---- Pipeline Definition ----------------------------------------------------
-// The entire pipeline runs on a Jenkins agent labelled "jenkins-slave". This
-// agent is expected to have Docker, AWS CLI, and git installed.
 pipeline {
     agent { label 'jenkins-slave' }
+
+    // ---- Parameters -----------------------------------------------------------
+    // The git tag to build and deploy. Filled in by the developer when manually
+    // triggering one of the three environment jobs.
+    parameters {
+        string(name: 'GIT_TAG', defaultValue: '',
+               description: 'Git tag to build and deploy (e.g. 1.2.3)')
+    }
 
     // ---- Environment Variables ------------------------------------------------
     // These variables are available to all stages in the pipeline.
@@ -40,12 +52,12 @@ pipeline {
         // Name of the ECS cluster that hosts the Fargate services.
         CLUSTER_NAME = 'flowharbor-cluster'
 
+        // Target environment is derived from the job name suffix:
+        //   flowharbor-dev → dev, flowharbor-staging → staging, flowharbor-prod → prod
+        TARGET_ENV = env.JOB_NAME.tokenize('-').last()
 
-        // Git metadata extracted at pipeline start for display in the app and
-        // for traceability throughout the deployment.
-        GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-        GIT_BRANCH = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
-        GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
+        // Pipeline URL and deploy timestamp (git metadata is captured in the
+        // "Checkout Tag" stage so it reflects the checked-out tag, not main).
         PIPELINE_URL = "${env.BUILD_URL}"
         TIMESTAMP = sh(script: "date -u +'%Y-%m-%dT%H:%M:%SZ'", returnStdout: true).trim()
     }
@@ -53,35 +65,52 @@ pipeline {
     // ---- Pipeline Stages ------------------------------------------------------
     stages {
 
-        // === Stage 1: Build ====================================================
-        // Build the Docker image from the application source (app/ directory).
-        // The image is tagged with both the Jenkins build number and "latest".
-        // Build arguments and metadata are logged for traceability.
+        // === Stage 1: Checkout Tag =============================================
+        // Validate the GIT_TAG parameter, fetch all tags from the remote, and
+        // check out the requested tag so the app source matches the release.
+        // The Jenkinsfile itself is loaded from the main branch (job SCM config).
+        stage('Checkout Tag') {
+            steps {
+                script {
+                    if (!params.GIT_TAG?.trim()) {
+                        error "GIT_TAG parameter is required. Enter the git tag to deploy (e.g. 1.2.3)."
+                    }
+                    echo "Checking out git tag: ${params.GIT_TAG}"
+                    sh "git fetch --tags --force --prune"
+                    sh "git checkout -f ${params.GIT_TAG}"
+
+                    // Capture git metadata AFTER the tag checkout so it reflects
+                    // the exact released commit being deployed.
+                    env.GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    env.GIT_BRANCH = params.GIT_TAG
+                    env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
+                    echo "  Commit:  ${env.GIT_COMMIT_SHORT}"
+                    echo "  Author:  ${env.GIT_AUTHOR}"
+                }
+            }
+        }
+
+        // === Stage 2: Build ====================================================
+        // Build the Docker image from the checked-out application source (app/).
+        // The image is tagged with the git tag and "latest".
         stage('Build') {
             steps {
                 script {
-                    // Visual separator block for readable log output.
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "  Building Docker image"
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "  Repo:    ${ECR_REPOSITORY}"
-                    echo "  Tag:     ${BUILD_NUMBER}"
-                    echo "  Branch:  ${GIT_BRANCH}"
+                    echo "  Tag:     ${params.GIT_TAG}"
+                    echo "  Env:     ${TARGET_ENV}"
                     echo "  Commit:  ${GIT_COMMIT_SHORT}"
                     echo "  Author:  ${GIT_AUTHOR}"
 
-                    // Build the image with the build number as tag. The BUILD_NUMBER
-                    // arg is forwarded to the Dockerfile so the container knows which
-                    // build produced it.
-                    sh "docker build --build-arg BUILD_NUMBER=${BUILD_NUMBER} -t ${ECR_REPOSITORY}:${BUILD_NUMBER} -f app/Dockerfile app/"
+                    sh "docker build -t ${ECR_REPOSITORY}:${params.GIT_TAG} -f app/Dockerfile app/"
 
-                    // Also tag as "latest" so the ECS task definitions can reference
-                    // a stable tag that always points to the most recent build.
-                    sh "docker tag ${ECR_REPOSITORY}:${BUILD_NUMBER} ${ECR_REPOSITORY}:latest"
+                    sh "docker tag ${ECR_REPOSITORY}:${params.GIT_TAG} ${ECR_REPOSITORY}:latest"
 
-                    // Inspect the freshly built image and log when it was created.
                     def imageInspect = sh(
-                        script: "docker images ${ECR_REPOSITORY}:${BUILD_NUMBER} --format '{{.CreatedSince}}'",
+                        script: "docker images ${ECR_REPOSITORY}:${params.GIT_TAG} --format '{{.CreatedSince}}'",
                         returnStdout: true
                     ).trim()
                     echo "  Built:   ${imageInspect}"
@@ -89,83 +118,40 @@ pipeline {
             }
         }
 
-        // === Stage 2: Push to ECR ==============================================
+        // === Stage 3: Push to ECR ==============================================
         // Authenticate Docker with the AWS ECR registry, then push both tags
-        // (build-number and latest). The image digest is retrieved for auditing.
+        // (git tag and latest). The image digest is retrieved for auditing.
         stage('Push to ECR') {
             steps {
                 script {
-                    // Authenticate: get a temporary password from ECR and pipe it
-                    // to `docker login`. This avoids storing long-lived credentials.
                     sh """
                         aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | \
                         docker login --username AWS --password-stdin ${ECR_REPOSITORY}
                     """
 
-                    // Push both tags to the remote registry.
-                    sh "docker push ${ECR_REPOSITORY}:${BUILD_NUMBER}"
+                    sh "docker push ${ECR_REPOSITORY}:${params.GIT_TAG}"
                     sh "docker push ${ECR_REPOSITORY}:latest"
 
-                    // Retrieve the SHA256 digest of the pushed image for audit trails.
                     def digest = sh(
-                        script: "aws ecr describe-images --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-ids imageTag=${BUILD_NUMBER} --query 'imageDetails[0].imageDigest' --output text",
+                        script: "aws ecr describe-images --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-ids imageTag=${params.GIT_TAG} --query 'imageDetails[0].imageDigest' --output text",
                         returnStdout: true
                     ).trim()
 
-                    // Log the push result for pipeline output visibility.
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "  Pushed to ECR"
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                    echo "  Image: ${ECR_REPOSITORY}:${BUILD_NUMBER}"
+                    echo "  Image: ${ECR_REPOSITORY}:${params.GIT_TAG}"
                     echo "  Digest: ${digest}"
                 }
             }
         }
 
-        // === Stage 3: Deploy to Dev ============================================
-        // Automatically promote the new image to the dev environment. No manual
-        // approval is needed for dev — it serves as the first integration test.
-        stage('Deploy to Dev') {
+        // === Stage 4: Deploy ===================================================
+        // Deploy the tagged image directly to this job's target environment.
+        // No promotion chain and no manual approval gates.
+        stage('Deploy') {
             steps {
-                script { promote('dev') }
-            }
-        }
-
-        // === Stage 4: Approve Staging ==========================================
-        // Manual input gate requiring an admin user to approve promotion to
-        // staging. This is where a human validates dev before wider rollout.
-        stage('Approve Staging') {
-            steps {
-                input message: "Promote build #${BUILD_NUMBER} (${GIT_COMMIT_SHORT}) to staging?",
-                      ok: "Promote to Staging",
-                      submitter: 'admin'
-            }
-        }
-
-        // === Stage 5: Promote to Staging =======================================
-        // Once approved, deploy the same image to the staging environment.
-        stage('Promote to Staging') {
-            steps {
-                script { promote('staging') }
-            }
-        }
-
-        // === Stage 6: Approve Production =======================================
-        // A second manual approval gate before the most critical deployment.
-        // This is the final safety check before production rollout.
-        stage('Approve Production') {
-            steps {
-                input message: "Promote build #${BUILD_NUMBER} (${GIT_COMMIT_SHORT}) to production?",
-                      ok: "Promote to Production",
-                      submitter: 'admin'
-            }
-        }
-
-        // === Stage 7: Promote to Production ====================================
-        // Final deployment stage — pushes the image to production ECS service.
-        stage('Promote to Production') {
-            steps {
-                script { promote('prod') }
+                script { promote(TARGET_ENV) }
             }
         }
     }
@@ -173,29 +159,31 @@ pipeline {
     // ---- Post-Build Actions ---------------------------------------------------
     // Regardless of outcome, certain actions run after all stages complete.
     post {
-        // On success, print a detailed promotion summary banner showing which
-        // build, version, commit, and branch were deployed to which environments.
+        // On success, print a detailed summary banner showing which environment
+        // and tag were deployed.
         success {
             script {
+                def envLabel = [
+                    dev:     "Dev",
+                    staging: "Staging",
+                    prod:    "Production"
+                ][TARGET_ENV]
                 def envUrl = [
                     dev:     "https://testing.flowharbor.in",
                     staging: "https://staging.flowharbor.in",
                     prod:    "https://flowharbor.in"
-                ]
+                ][TARGET_ENV]
                 echo ""
                 echo "╔══════════════════════════════════════════════════╗"
-                echo "║           PROMOTION COMPLETE                    ║"
+                echo "║           DEPLOYMENT COMPLETE                    ║"
                 echo "╠══════════════════════════════════════════════════╣"
-                echo "║  Build:   #${BUILD_NUMBER.padLeft(6)}                          ║"
-                echo "║  Version: ${params.VERSION?.padRight(28)}           ║"
+                echo "║  Env:     ${envLabel.padRight(28)}           ║"
+                echo "║  Tag:     ${params.GIT_TAG.padRight(28)}           ║"
                 echo "║  Commit:  ${GIT_COMMIT_SHORT.padRight(28)}           ║"
-                echo "║  Branch:  ${GIT_BRANCH.padRight(28)}           ║"
                 echo "║  Author:  ${GIT_AUTHOR.padRight(28)}           ║"
-                echo "║  Image:   ${ECR_REPOSITORY}:${BUILD_NUMBER}   ║"
+                echo "║  Image:   ${ECR_REPOSITORY}:${params.GIT_TAG}   ║"
                 echo "╠══════════════════════════════════════════════════╣"
-                echo "║  Dev:     https://testing.flowharbor.in  ║"
-                echo "║  Staging: https://staging.flowharbor.in  ║"
-                echo "║  Prod:    https://flowharbor.in          ║"
+                echo "║  URL:     ${envUrl.padRight(28)}  ║"
                 echo "╠══════════════════════════════════════════════════╣"
                 echo "║  Jenkins: ${PIPELINE_URL}  ║"
                 echo "╚══════════════════════════════════════════════════╝"
@@ -223,8 +211,8 @@ pipeline {
 // =============================================================================
 // This function encapsulates the ECS deployment logic for a single environment.
 // Steps:
-//   1. Fetch the current task definition for the target family (e.g., flowharbor-dev).
-//   2. Build a new container definition that points to ${ECR_REPOSITORY}:latest
+//   1. Fetch the current task definition for the target family (e.g., flowharbor-staging).
+//   2. Build a new container definition that points to ${ECR_REPOSITORY}:${GIT_TAG}
 //      and includes CI/CD metadata as environment variables.
 //   3. Register a new task definition revision.
 //   4. Update the ECS service to use the new revision (triggering a rolling update).
@@ -253,9 +241,9 @@ def promote(envName) {
         prod:    "https://flowharbor.in"
     ][envName]
 
-    // Log the promotion target for pipeline visibility.
+    // Log the deployment target for pipeline visibility.
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  Promoting to ${envLabel} (${envName})"
+    echo "  Deploying to ${envLabel} (${envName})"
     echo "  URL: ${envUrl}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -273,11 +261,11 @@ def promote(envName) {
 
     // ---- Build New Container Definition ---------------------------------------
     // Create an updated container definition that:
-    //   - Uses the ":latest" image tag (just pushed in the ECR stage)
+    //   - Uses the git-tag image (just pushed in the ECR stage)
     //   - Injects all CI/CD metadata as environment variables for runtime display
     def newContainerDef = [
         name: containerDef.name,
-        image: "${ECR_REPOSITORY}:latest",
+        image: "${ECR_REPOSITORY}:${params.GIT_TAG}",
         essential: containerDef.essential,
         portMappings: containerDef.portMappings,
         logConfiguration: containerDef.logConfiguration,
@@ -285,7 +273,7 @@ def promote(envName) {
         // render the build info on the web page at runtime.
         environment: [
             [name: "ENV", value: envName],
-            [name: "VERSION", value: params.VERSION ?: "1.0.0"],
+            [name: "VERSION", value: params.GIT_TAG],
             [name: "BUILD_NUMBER", value: "${BUILD_NUMBER}"],
             [name: "GIT_COMMIT", value: GIT_COMMIT_SHORT],
             [name: "GIT_BRANCH", value: GIT_BRANCH],
