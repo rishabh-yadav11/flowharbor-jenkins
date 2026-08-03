@@ -40,6 +40,7 @@ pipeline {
         // Name of the ECS cluster that hosts the Fargate services.
         CLUSTER_NAME = 'flowharbor-cluster'
 
+
         // Git metadata extracted at pipeline start for display in the app and
         // for traceability throughout the deployment.
         GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
