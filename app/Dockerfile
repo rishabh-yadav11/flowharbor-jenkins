@@ -15,4 +15,4 @@ COPY --from=builder /app/public ./public
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 EXPOSE 80
-CMD ["/entrypoint.sh"]
+CMD ["/app/entrypoint.sh"]
