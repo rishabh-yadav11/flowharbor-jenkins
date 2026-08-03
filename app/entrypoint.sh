@@ -12,7 +12,7 @@ PIPELINE_URL=${PIPELINE_URL:-#}
 
 cat > public/runtime-config.js <<EOF
 window.__RUNTIME_CONFIG__ = {
-  ENV: "${ENV} on $(hostname)",
+  ENV: "${ENV}",
   VERSION: "${VERSION}",
   BUILD_NUMBER: "${BUILD_NUMBER}",
   GIT_COMMIT: "${GIT_COMMIT}",
