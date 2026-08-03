@@ -75,14 +75,17 @@ pipeline {
                     if (!params.GIT_TAG?.trim()) {
                         error "GIT_TAG parameter is required. Enter the git tag to deploy (e.g. 1.2.3)."
                     }
-                    echo "Checking out git tag: ${params.GIT_TAG}"
+                    // Normalize the parameter once (trim whitespace) and reuse it
+                    // everywhere so the image tag is always a valid ECR tag.
+                    env.GIT_TAG = params.GIT_TAG.trim()
+                    echo "Checking out git tag: ${env.GIT_TAG}"
                     sh "git fetch --tags --force --prune"
-                    sh "git checkout -f ${params.GIT_TAG}"
+                    sh "git checkout -f ${env.GIT_TAG}"
 
                     // Capture git metadata AFTER the tag checkout so it reflects
                     // the exact released commit being deployed.
                     env.GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    env.GIT_BRANCH = params.GIT_TAG
+                    env.GIT_BRANCH = env.GIT_TAG
                     env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                     echo "  Commit:  ${env.GIT_COMMIT_SHORT}"
                     echo "  Author:  ${env.GIT_AUTHOR}"
@@ -100,17 +103,17 @@ pipeline {
                     echo "  Building Docker image"
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "  Repo:    ${ECR_REPOSITORY}"
-                    echo "  Tag:     ${params.GIT_TAG}"
+                    echo "  Tag:     ${env.GIT_TAG}"
                     echo "  Env:     ${TARGET_ENV}"
                     echo "  Commit:  ${GIT_COMMIT_SHORT}"
                     echo "  Author:  ${GIT_AUTHOR}"
 
-                    sh "docker build -t ${ECR_REPOSITORY}:${params.GIT_TAG} -f app/Dockerfile app/"
+                    sh "docker build -t ${ECR_REPOSITORY}:${env.GIT_TAG} -f app/Dockerfile app/"
 
-                    sh "docker tag ${ECR_REPOSITORY}:${params.GIT_TAG} ${ECR_REPOSITORY}:latest"
+                    sh "docker tag ${ECR_REPOSITORY}:${env.GIT_TAG} ${ECR_REPOSITORY}:latest"
 
                     def imageInspect = sh(
-                        script: "docker images ${ECR_REPOSITORY}:${params.GIT_TAG} --format '{{.CreatedSince}}'",
+                        script: "docker images ${ECR_REPOSITORY}:${env.GIT_TAG} --format '{{.CreatedSince}}'",
                         returnStdout: true
                     ).trim()
                     echo "  Built:   ${imageInspect}"
@@ -129,18 +132,18 @@ pipeline {
                         docker login --username AWS --password-stdin ${ECR_REPOSITORY}
                     """
 
-                    sh "docker push ${ECR_REPOSITORY}:${params.GIT_TAG}"
+                    sh "docker push ${ECR_REPOSITORY}:${env.GIT_TAG}"
                     sh "docker push ${ECR_REPOSITORY}:latest"
 
                     def digest = sh(
-                        script: "aws ecr describe-images --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-ids imageTag=${params.GIT_TAG} --query 'imageDetails[0].imageDigest' --output text",
+                        script: "aws ecr describe-images --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-ids imageTag=${env.GIT_TAG} --query 'imageDetails[0].imageDigest' --output text",
                         returnStdout: true
                     ).trim()
 
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "  Pushed to ECR"
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                    echo "  Image: ${ECR_REPOSITORY}:${params.GIT_TAG}"
+                    echo "  Image: ${ECR_REPOSITORY}:${env.GIT_TAG}"
                     echo "  Digest: ${digest}"
                 }
             }
@@ -178,10 +181,10 @@ pipeline {
                 echo "║           DEPLOYMENT COMPLETE                    ║"
                 echo "╠══════════════════════════════════════════════════╣"
                 echo "║  Env:     ${envLabel.padRight(28)}           ║"
-                echo "║  Tag:     ${params.GIT_TAG.padRight(28)}           ║"
+                echo "║  Tag:     ${env.GIT_TAG.padRight(28)}           ║"
                 echo "║  Commit:  ${GIT_COMMIT_SHORT.padRight(28)}           ║"
                 echo "║  Author:  ${GIT_AUTHOR.padRight(28)}           ║"
-                echo "║  Image:   ${ECR_REPOSITORY}:${params.GIT_TAG}   ║"
+                echo "║  Image:   ${ECR_REPOSITORY}:${env.GIT_TAG}   ║"
                 echo "╠══════════════════════════════════════════════════╣"
                 echo "║  URL:     ${envUrl.padRight(28)}  ║"
                 echo "╠══════════════════════════════════════════════════╣"
@@ -265,7 +268,7 @@ def promote(envName) {
     //   - Injects all CI/CD metadata as environment variables for runtime display
     def newContainerDef = [
         name: containerDef.name,
-        image: "${ECR_REPOSITORY}:${params.GIT_TAG}",
+        image: "${ECR_REPOSITORY}:${env.GIT_TAG}",
         essential: containerDef.essential,
         portMappings: containerDef.portMappings,
         logConfiguration: containerDef.logConfiguration,
@@ -273,7 +276,7 @@ def promote(envName) {
         // render the build info on the web page at runtime.
         environment: [
             [name: "ENV", value: envName],
-            [name: "VERSION", value: params.GIT_TAG],
+            [name: "VERSION", value: env.GIT_TAG],
             [name: "BUILD_NUMBER", value: "${BUILD_NUMBER}"],
             [name: "GIT_COMMIT", value: GIT_COMMIT_SHORT],
             [name: "GIT_BRANCH", value: GIT_BRANCH],
