@@ -33,7 +33,7 @@ export default function Home() {
           FlowHarbor
         </h1>
         <p className="mt-5 max-w-md text-base text-white/50 sm:text-lg">
-          Every commit, every tag, a flawless release. Built to move.
+          Every commit, every tag, a flawless release. Built to move. tools
         </p>
       </div>
 
