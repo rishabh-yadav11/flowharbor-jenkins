@@ -40,6 +40,10 @@ resource "aws_instance" "this" {
     project_name       = var.project_name
   })
 
+  # Recreate the instance whenever the bootstrap script changes so fixes to
+  # user-data are applied automatically on the next terraform apply.
+  user_data_replace_on_change = true
+
   # Enforce IMDSv2 (token-based metadata access) for security best practice.
   metadata_options {
     http_tokens = "required"

@@ -55,57 +55,128 @@ pip3 install awscli --break-system-packages 2>&1 | tail -3
 mkdir -p /home/ubuntu/jenkins-agent /var/jenkins
 chown -R ubuntu:ubuntu /home/ubuntu/jenkins-agent /var/jenkins
 
-# ---- SSM Parameter Polling --------------------------------------------------
-# The Jenkins Master creates SSM parameters during its bootstrap. The slave
-# must wait for these to be available before it can connect.
+# ---- Master Ready Marker Polling --------------------------------------------
+# The Jenkins master writes /${project_name}/jenkins-master-ready = "ready" only
+# AFTER it has fully bootstrapped (plugins installed, slave node created, agent
+# secret stored in SSM). The slave must wait for BOTH:
+#   - the marker set to "ready", AND
+#   - a real (non-placeholder) agent secret in SSM
+# This prevents the slave from acting on a stale "ready" marker or a stale
+# secret left behind by a previous master that has since been replaced.
 #
-# We poll up to 30 times (20-second intervals = 10 minutes max wait).
-# This accounts for the time the master takes to install Jenkins, plugins,
-# and create the slave node configuration.
-for i in $(seq 1 30); do
-    # Fetch the master URL (plaintext parameter).
-    MASTER_URL=$(aws ssm get-parameter \
-        --name "/${project_name}/jenkins-master-url" \
+# We poll up to 40 times (15-second intervals = 10 minutes max wait).
+for i in $(seq 1 40); do
+    READY=$(aws ssm get-parameter \
+        --name "/${project_name}/jenkins-master-ready" \
         --query "Parameter.Value" \
         --output text \
         --region "$REGION" 2>/dev/null || echo "")
 
-    # Fetch the slave secret (encrypted SecureString parameter).
-    AGENT_SECRET=$(aws ssm get-parameter \
+    SECRET=$(aws ssm get-parameter \
         --name "/${project_name}/jenkins-slave-secret" \
         --with-decryption \
         --query "Parameter.Value" \
         --output text \
         --region "$REGION" 2>/dev/null || echo "")
 
-    # If both values are non-empty and not "None", break out of the loop.
-    if [ -n "$MASTER_URL" ] && [ "$MASTER_URL" != "None" ] && [ -n "$AGENT_SECRET" ] && [ "$AGENT_SECRET" != "None" ]; then
+    if [ "$READY" = "ready" ] && [ -n "$SECRET" ] && [ "$SECRET" != "None" ] && [ "$SECRET" != "pending" ]; then
+        echo "Jenkins master is ready"
+        AGENT_SECRET="$SECRET"
         break
     fi
 
-    echo "Waiting for Jenkins master SSM params... attempt $i"
-    sleep 20
+    echo "Waiting for Jenkins master to finish bootstrapping... attempt $i"
+    sleep 15
 done
 
-# ---- Validate SSM Parameters ------------------------------------------------
-# If the parameters weren't found within the polling window, exit with an error.
-if [ -z "$MASTER_URL" ] || [ "$MASTER_URL" = "None" ]; then
-    echo "Failed to discover Jenkins master URL"
+# ---- Validate Master Readiness ----------------------------------------------
+# If the marker was never set to "ready" (with a real secret) within the polling
+# window, exit with an error so the failure is visible in the cloud-init logs.
+if [ -z "$AGENT_SECRET" ] || [ "$AGENT_SECRET" = "None" ] || [ "$AGENT_SECRET" = "pending" ]; then
+    echo "Timed out waiting for Jenkins master to become ready"
     exit 1
 fi
 
 # ---- Download Agent Jar -----------------------------------------------------
-# Download the Jenkins agent.jar from the master's JNLP endpoint.
-# This JAR file is the JNLP agent that connects to the master.
-curl -sL -o /home/ubuntu/jenkins-agent/agent.jar "$MASTER_URL/jnlpJars/agent.jar" --max-time 30
+# Download the Jenkins agent.jar from the master's JNLP endpoint and verify it
+# is a valid ZIP/JAR before starting the agent. The master may still be warming
+# up, so retry with backoff and re-read the master URL on every attempt (it is
+# rewritten by the master when its private IP changes across recreations).
+for i in $(seq 1 30); do
+    MASTER_URL=$(aws ssm get-parameter \
+        --name "/${project_name}/jenkins-master-url" \
+        --query "Parameter.Value" \
+        --output text \
+        --region "$REGION" 2>/dev/null || echo "")
+
+    curl -sL -o /home/ubuntu/jenkins-agent/agent.jar "$MASTER_URL/jnlpJars/agent.jar" --max-time 30
+    if [ -s /home/ubuntu/jenkins-agent/agent.jar ] && python3 -c "import zipfile,sys;zipfile.ZipFile(sys.argv[1])" /home/ubuntu/jenkins-agent/agent.jar 2>/dev/null; then
+        echo "agent.jar downloaded successfully"
+        break
+    fi
+    echo "Retrying agent.jar download... attempt $i"
+    sleep 15
+done
+
+# ---- Agent Start Wrapper ----------------------------------------------------
+# Create a wrapper script that re-reads the master URL and agent secret from
+# SSM on every invocation. The systemd unit restarts this on failure, so if the
+# master is ever recreated the agent automatically re-connects with the fresh
+# secret instead of being stuck with a stale one baked into the unit file.
+cat > /home/ubuntu/jenkins-agent/start-agent.sh << 'WRAPPER'
+#!/bin/bash
+export PATH=$PATH:/usr/local/bin
+
+IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+REGION=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" "http://169.254.169.254/latest/meta-data/placement/region")
+
+MASTER_URL=$(aws ssm get-parameter \
+    --name "/${project_name}/jenkins-master-url" \
+    --query "Parameter.Value" \
+    --output text \
+    --region "$REGION")
+
+AGENT_SECRET=$(aws ssm get-parameter \
+    --name "/${project_name}/jenkins-slave-secret" \
+    --with-decryption \
+    --query "Parameter.Value" \
+    --output text \
+    --region "$REGION")
+
+if [ -z "$MASTER_URL" ] || [ "$MASTER_URL" = "None" ] || \
+   [ -z "$AGENT_SECRET" ] || [ "$AGENT_SECRET" = "None" ] || [ "$AGENT_SECRET" = "pending" ]; then
+    echo "SSM parameters not ready yet, will retry"
+    exit 1
+fi
+
+# Ensure a valid agent.jar exists before starting. If the master was recreated
+# or the initial download happened while the master was still coming up, the
+# jar may be missing or stale — re-download it from the CURRENT master URL.
+if [ ! -s /home/ubuntu/jenkins-agent/agent.jar ] || ! python3 -c "import zipfile,sys;zipfile.ZipFile(sys.argv[1])" /home/ubuntu/jenkins-agent/agent.jar 2>/dev/null; then
+    echo "agent.jar missing or invalid, downloading from $MASTER_URL"
+    rm -f /home/ubuntu/jenkins-agent/agent.jar
+    curl -sL -o /home/ubuntu/jenkins-agent/agent.jar "$MASTER_URL/jnlpJars/agent.jar" --max-time 30
+    if [ ! -s /home/ubuntu/jenkins-agent/agent.jar ] || ! python3 -c "import zipfile,sys;zipfile.ZipFile(sys.argv[1])" /home/ubuntu/jenkins-agent/agent.jar 2>/dev/null; then
+        echo "agent.jar download failed, will retry"
+        exit 1
+    fi
+fi
+
+exec /usr/bin/java -jar /home/ubuntu/jenkins-agent/agent.jar \
+  -url "$MASTER_URL" \
+  -secret "$AGENT_SECRET" \
+  -name jenkins-slave \
+  -workDir /var/jenkins
+WRAPPER
+chmod +x /home/ubuntu/jenkins-agent/start-agent.sh
+chown -R ubuntu:ubuntu /home/ubuntu/jenkins-agent
 
 # ---- Systemd Service Unit ---------------------------------------------------
 # Create a systemd service for the Jenkins agent so it:
 #   - Runs as the ubuntu user (not root)
 #   - Starts automatically on system boot
 #   - Restarts on failure (Restart=always)
-#   - Connects to the master using the retrieved URL and secret
-#   - Uses /var/jenkins as the working directory
+#   - Re-reads the master URL and secret from SSM on every restart
 cat > /etc/systemd/system/jenkins-agent.service << SERVICE
 [Unit]
 Description=Jenkins Agent Slave
@@ -115,11 +186,7 @@ After=network.target docker.service
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/jenkins-agent
-ExecStart=/usr/bin/java -jar /home/ubuntu/jenkins-agent/agent.jar \
-  -url $MASTER_URL \
-  -secret $AGENT_SECRET \
-  -name jenkins-slave \
-  -workDir /var/jenkins
+ExecStart=/home/ubuntu/jenkins-agent/start-agent.sh
 Restart=always
 RestartSec=10
 
