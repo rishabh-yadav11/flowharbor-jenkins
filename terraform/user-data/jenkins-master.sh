@@ -68,6 +68,24 @@ usermod -aG docker ubuntu
 # --break-system-packages is needed for newer Python 3 on Ubuntu 24.04.
 pip3 install awscli --break-system-packages
 
+# ---- Reset Stale SSM Parameters ---------------------------------------------
+# Clear values left over from any previous deployment so the slave never picks
+# up an old agent secret or a stale "ready" marker while this master is still
+# bootstrapping. These are rewritten with final values later in this script.
+aws ssm put-parameter \
+    --name "/${project_name}/jenkins-slave-secret" \
+    --value "pending" \
+    --type SecureString \
+    --overwrite \
+    --region "$REGION"
+
+aws ssm put-parameter \
+    --name "/${project_name}/jenkins-master-ready" \
+    --value "booting" \
+    --type String \
+    --overwrite \
+    --region "$REGION"
+
 # ---- Jenkins WAR Download ---------------------------------------------------
 # Create the directory and download the Jenkins WAR file.
 # We use the latest stable release of the 2.x line (2.568.1).
@@ -194,14 +212,14 @@ curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
 
 # ---- Register Slave Node ----------------------------------------------------
 # Create a permanent slave node named "jenkins-slave" with:
-#   - 2 executors
+#   - 3 executors
 #   - Label "docker linux" (used by the pipeline agent directive)
 #   - JNLP launcher (slave connects outbound)
 #   - Always-on retention strategy
 curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
   -H "Jenkins-Crumb: $CRUMB" \
   -X POST 'http://localhost:8080/scriptText' \
-  --data-urlencode 'script=import jenkins.model.*;import hudson.slaves.*;def i=Jenkins.getInstance();def n=i.getNode("jenkins-slave");if(n){i.removeNode(n)};def s=new DumbSlave("jenkins-slave","/var/jenkins",null);s.setNumExecutors(2);s.setLabelString("docker linux");s.setMode(hudson.model.Node.Mode.NORMAL);s.setRetentionStrategy(new RetentionStrategy.Always());s.setLauncher(new JNLPLauncher());i.addNode(s);i.save()' \
+  --data-urlencode 'script=import jenkins.model.*;import hudson.slaves.*;def i=Jenkins.getInstance();def n=i.getNode("jenkins-slave");if(n){i.removeNode(n)};def s=new DumbSlave("jenkins-slave","/var/jenkins",null);s.setNumExecutors(3);s.setLabelString("docker linux");s.setMode(hudson.model.Node.Mode.NORMAL);s.setRetentionStrategy(new RetentionStrategy.Always());s.setLauncher(new JNLPLauncher());i.addNode(s);i.save()' \
   --max-time 10
 
 # ---- Retrieve Slave Agent Secret --------------------------------------------
@@ -238,7 +256,7 @@ for env in dev staging prod; do
   curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
     -H "Jenkins-Crumb: $CRUMB" \
     -X POST 'http://localhost:8080/scriptText' \
-    --data-urlencode "script=import jenkins.model.*;import org.jenkinsci.plugins.workflow.job.WorkflowJob;import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition;import hudson.plugins.git.GitSCM;import hudson.plugins.git.BranchSpec;import hudson.plugins.git.UserRemoteConfig;import hudson.model.*;import org.jenkinsci.plugins.workflow.job.properties.*;def i=Jenkins.getInstance();def jn=\"flowharbor-\$\{env}\";def ex=i.getItem(jn);if(ex){ex.delete()};def j=new WorkflowJob(i,jn);j.addProperty(new ParametersDefinitionProperty(new StringParameterDefinition(\"GIT_TAG\",\"\",\"Git tag to build and deploy (e.g. 1.2.3)\")));def scm=new GitSCM([new UserRemoteConfig(\"https://github.com/rishabh-yadav11/flowharbor-jenkins-demo.git\",null,null,null)],[new BranchSpec(\"*/main\")],false,[],null,null,[]);j.setDefinition(new CpsScmFlowDefinition(scm,\"Jenkinsfile\"));i.add(j,jn);j.save();i.save();println(\"JOB_CREATED_\$\{env}\")" \
+    --data-urlencode "script=import jenkins.model.*;import org.jenkinsci.plugins.workflow.job.WorkflowJob;import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition;import hudson.plugins.git.GitSCM;import hudson.plugins.git.BranchSpec;import hudson.plugins.git.UserRemoteConfig;import hudson.model.*;import org.jenkinsci.plugins.workflow.job.properties.*;def i=Jenkins.getInstance();def jn=\"flowharbor-$${env}\";def ex=i.getItem(jn);if(ex){ex.delete()};def j=new WorkflowJob(i,jn);j.addProperty(new ParametersDefinitionProperty(new StringParameterDefinition(\"GIT_TAG\",\"\",\"Git tag to build and deploy (e.g. 1.2.3)\")));def scm=new GitSCM([new UserRemoteConfig(\"https://github.com/rishabh-yadav11/flowharbor-jenkins-demo.git\",null,null,null)],[new BranchSpec(\"*/main\")],false,[],null,null,[]);j.setDefinition(new CpsScmFlowDefinition(scm,\"Jenkinsfile\"));i.add(j,jn);j.save();i.save();println(\"JOB_CREATED_$${env}\")" \
     --max-time 10
 done
 
@@ -251,6 +269,17 @@ curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
   -X POST 'http://localhost:8080/scriptText' \
   --data-urlencode 'script=import jenkins.model.*;import com.cloudbees.plugins.credentials.*;import com.cloudbees.plugins.credentials.domains.*;import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;import hudson.util.Secret;def i=Jenkins.getInstance();def s=Domain.global();def p=CredentialsProvider.lookupStores(i).iterator().next();def id="ecr-repository-url";def ex=CredentialsProvider.lookupCredentials(StringCredentialsImpl.class,i).find({it.id==id});if(ex){p.removeCredentials(s,ex)};def c=new StringCredentialsImpl(CredentialsScope.GLOBAL,id,"ECR Repository URL",Secret.fromString("${ecr_repository_url}"));p.addCredentials(s,c);i.save();println("ECR_CRED_ADDED")' \
   --max-time 10
+
+# ---- Signal Master Ready ----------------------------------------------------
+# Tell the Jenkins Slave that the master has finished bootstrapping and that
+# the master URL and agent secret in SSM are now final. The slave waits for
+# this marker before downloading agent.jar and connecting via JNLP.
+aws ssm put-parameter \
+    --name "/${project_name}/jenkins-master-ready" \
+    --value "ready" \
+    --type String \
+    --overwrite \
+    --region "$REGION"
 
 # ---- Completion Marker ------------------------------------------------------
 echo "MASTER_SETUP_COMPLETE"
