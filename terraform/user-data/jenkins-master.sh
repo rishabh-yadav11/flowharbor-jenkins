@@ -114,19 +114,19 @@ curl -fsSL https://github.com/jenkinsci/plugin-installation-manager-tool/release
 java -jar /usr/share/jenkins/jenkins-plugin-manager.jar \
   --war /usr/share/jenkins/jenkins.war \
   --plugin-download-directory /var/lib/jenkins/plugins \
-  --plugins workflow-aggregator:latest \
-    git:latest \
-    pipeline-aws:latest \
-    docker-workflow:latest \
-    cloudbees-folder:latest \
-    blueocean:latest \
-    credentials-binding:latest \
-    configuration-as-code:latest \
-    pipeline-input-step:latest \
-    github:latest \
-    pipeline-utility-steps:latest \
-    dark-theme:latest \
-    job-dsl:latest
+  --plugins workflow-aggregator \
+    git \
+    pipeline-aws \
+    docker-workflow \
+    cloudbees-folder \
+    blueocean \
+    credentials-binding \
+    configuration-as-code \
+    pipeline-input-step \
+    github \
+    pipeline-utility-steps \
+    dark-theme \
+    job-dsl
 
 # Fix ownership of the downloaded plugins.
 chown -R jenkins:jenkins /var/lib/jenkins/plugins
