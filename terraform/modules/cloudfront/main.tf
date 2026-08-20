@@ -15,6 +15,55 @@
 # directly to the ALB.
 # =============================================================================
 
+# ---- Origin Request Policy ---------------------------------------------------
+# Only the Host header is forwarded to the ALB (required for host-based
+# routing). No cookies, no query strings — reduces data exposure compared to
+# the previous "forward all cookies and query strings" behavior.
+resource "aws_cloudfront_origin_request_policy" "alb" {
+  name    = "${var.project_name}-alb-origin-request"
+  comment = "Forward only the Host header to the ALB for routing"
+
+  cookies_config {
+    cookie_behavior = "none"
+  }
+  query_strings_config {
+    query_string_behavior = "none"
+  }
+  headers_config {
+    header_behavior = "whitelist"
+    headers {
+      items = ["Host"]
+    }
+  }
+}
+
+# ---- Cache Policy ------------------------------------------------------------
+# Static landing page: cache responses without query strings or cookies in the
+# cache key, so users' cookies are never stored or echoed back.
+resource "aws_cloudfront_cache_policy" "alb" {
+  name    = "${var.project_name}-alb-cache"
+  comment = "Cache responses; no cookies or query strings in the cache key"
+
+  default_ttl = 3600
+  max_ttl     = 86400
+  min_ttl     = 0
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = true
+
+    cookies_config {
+      cookie_behavior = "none"
+    }
+    query_strings_config {
+      query_string_behavior = "none"
+    }
+    headers_config {
+      header_behavior = "none"
+    }
+  }
+}
+
 # ---- CloudFront Distribution ------------------------------------------------
 resource "aws_cloudfront_distribution" "this" {
   enabled             = true
@@ -29,6 +78,10 @@ resource "aws_cloudfront_distribution" "this" {
   # ---- Origin: ALB ----------------------------------------------------------
   # Traffic is forwarded to the ALB's DNS name over HTTP (TLS is between
   # viewer and CloudFront, then CloudFront and ALB use HTTP internally).
+  # SECURITY NOTE: origin_protocol_policy is "http-only" because the ALB only
+  # serves the CloudFront ACM cert regionally; upgrading to https-only would
+  # require an ALB listener/TLS setup for the CF↔origin hop. The CF↔ALB path
+  # stays inside AWS, so exposure is limited. Review before a production rollout.
   origin {
     domain_name = var.alb_domain_name
     origin_id   = "alb-origin"
@@ -57,18 +110,8 @@ resource "aws_cloudfront_distribution" "this" {
     cached_methods         = ["GET", "HEAD"] # Only cache read requests
     compress               = true            # Gzip/brotli compression
 
-    forwarded_values {
-      query_string = true     # Forward query strings to origin
-      headers      = ["Host"] # Forward Host header for ALB routing
-      cookies {
-        forward = "all" # Forward all cookies
-      }
-    }
-
-    # TTL settings: how long CloudFront caches responses.
-    min_ttl     = 0     # Minimum cache time
-    default_ttl = 3600  # 1 hour (default)
-    max_ttl     = 86400 # 1 day (maximum)
+    cache_policy_id          = aws_cloudfront_cache_policy.alb.id
+    origin_request_policy_id = aws_cloudfront_origin_request_policy.alb.id
   }
 
   # ---- Viewer Certificate ---------------------------------------------------

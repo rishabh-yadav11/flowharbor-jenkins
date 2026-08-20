@@ -190,6 +190,14 @@ ExecStart=/home/ubuntu/jenkins-agent/start-agent.sh
 Restart=always
 RestartSec=10
 
+# ---- Hardening --------------------------------------------------------------
+# Restrict the agent's filesystem and privilege scope so a compromised agent
+# cannot tamper with system files.
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/jenkins /home/ubuntu/jenkins-agent
+NoNewPrivileges=true
+
 [Install]
 WantedBy=multi-user.target
 SERVICE

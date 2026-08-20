@@ -13,12 +13,15 @@
 
 # ---- ECR Repository ---------------------------------------------------------
 # A private Docker image registry for the FlowHarbor application.
-# image_tag_mutability = "MUTABLE" allows overwriting tags (e.g., ":latest"),
-# which is important for our CI/CD workflow where every build pushes ":latest".
+# image_tag_mutability = "MUTABLE" allows overwriting tags (e.g., ":latest").
+# NOTE: IMMUTABLE is the safer default, but the pipeline pushes ":latest" on
+# every build. If you switch to IMMUTABLE, stop tagging with ":latest" first.
+# force_delete = false prevents `terraform destroy` from silently wiping
+# container images (a destructive, non-recoverable action).
 resource "aws_ecr_repository" "this" {
   name                 = "${var.project_name}-app" # Repository name: flowharbor-app
   image_tag_mutability = "MUTABLE"                 # Allow overwriting tags
-  force_delete         = true                      # Allow terraform destroy even if images exist
+  force_delete         = false                     # Protect images from accidental deletion
 
   # Automatically scan images for vulnerabilities when they are pushed.
   image_scanning_configuration {

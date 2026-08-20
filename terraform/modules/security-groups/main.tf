@@ -9,7 +9,7 @@
 #   1. alb_sg          — ALB (internet-facing): 443 in, all out
 #   2. jenkins_master   — Jenkins controller: 8080 (ALB+slave), 50000 (slave)
 #   3. jenkins_slave    — Jenkins agent: outbound-only
-#   4. ecs_tasks        — Fargate containers: 80 (ALB only)
+#   4. ecs_tasks        — Fargate containers: 3000 (ALB only)
 # =============================================================================
 
 # ---- ALB Security Group -----------------------------------------------------
@@ -19,6 +19,15 @@ resource "aws_security_group" "alb" {
   name        = "${var.project_name}-alb-sg"
   description = "Controls traffic to/from the Application Load Balancer"
   vpc_id      = var.vpc_id
+
+  # Allow HTTP traffic from the internet — used ONLY for the 301 redirect
+  # listener to HTTPS (no plaintext content is ever served).
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   # Allow HTTPS traffic from the internet (TLS termination at ALB).
   ingress {
@@ -113,7 +122,7 @@ resource "aws_security_group" "jenkins_slave" {
 }
 
 # ---- ECS Tasks Security Group -----------------------------------------------
-# ECS Fargate tasks (nginx containers) accept HTTP (80) from the ALB only.
+# ECS Fargate tasks (Next.js containers) accept HTTP (3000) from the ALB only.
 # This ensures containers are not directly accessible from the internet.
 resource "aws_security_group" "ecs_tasks" {
   name        = "${var.project_name}-ecs-tasks-sg"
@@ -122,8 +131,8 @@ resource "aws_security_group" "ecs_tasks" {
 
   # Allow HTTP traffic from the ALB only (not from the internet directly).
   ingress {
-    from_port       = 80
-    to_port         = 80
+    from_port       = 3000
+    to_port         = 3000
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }

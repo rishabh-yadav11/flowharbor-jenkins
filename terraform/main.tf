@@ -211,6 +211,7 @@ module "cloudfront" {
   domain_name     = var.domain_name
   alb_domain_name = module.alb.dns_name
   certificate_arn = module.acm.cloudfront_certificate_arn
+  project_name    = var.project_name
   depends_on      = [module.alb, module.acm]
 }
 

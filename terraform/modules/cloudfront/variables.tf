@@ -18,3 +18,8 @@ variable "certificate_arn" {
   description = "ARN of the ACM certificate in us-east-1 for CloudFront viewer HTTPS"
   type        = string
 }
+
+variable "project_name" {
+  description = "Project name used as a prefix for cache/origin request policy naming"
+  type        = string
+}

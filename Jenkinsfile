@@ -78,6 +78,14 @@ pipeline {
                     // Normalize the parameter once (trim whitespace) and reuse it
                     // everywhere so the image tag is always a valid ECR tag.
                     env.GIT_TAG = params.GIT_TAG.trim()
+                    // The tag is interpolated into shell commands below, so it
+                    // MUST be restricted to a safe semver-ish pattern. Without
+                    // this, a malicious tag value could inject shell commands
+                    // or arbitrary JavaScript (it also becomes the VERSION the
+                    // app renders and bakes into runtime-config.js).
+                    if (!(env.GIT_TAG ==~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/)) {
+                        error "GIT_TAG '${env.GIT_TAG}' is invalid. Use semver format, e.g. 1.2.3 or 1.2.3-rc.1"
+                    }
                     echo "Checking out git tag: ${env.GIT_TAG}"
                     sh "git fetch --tags --force --prune"
                     sh "git checkout -f ${env.GIT_TAG}"

@@ -25,8 +25,9 @@ resource "aws_lb" "this" {
   security_groups    = [var.security_group_id]
   subnets            = var.subnet_ids # Public subnets across 2 AZs
 
-  # Disabled for demo purposes (enabling would prevent terraform destroy).
-  enable_deletion_protection = false
+  # Deletion protection prevents accidental teardown of a production ALB.
+  # NOTE: set this back to false before running `terraform destroy`.
+  enable_deletion_protection = true
 
   tags = {
     Name = "${var.project_name}-alb"
@@ -58,10 +59,11 @@ resource "aws_lb_target_group" "jenkins" {
   }
 }
 
-# Dev target group — routes to the dev Fargate service on port 80.
+# Dev target group — routes to the dev Fargate service on port 3000
+# (non-root container port).
 resource "aws_lb_target_group" "dev" {
   name        = "${var.project_name}-dev-tg"
-  port        = 80
+  port        = 3000
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
   target_type = "ip" # Target by IP address (for Fargate tasks)
@@ -81,7 +83,7 @@ resource "aws_lb_target_group" "dev" {
 # Staging target group — routes to the staging Fargate service.
 resource "aws_lb_target_group" "staging" {
   name        = "${var.project_name}-staging-tg"
-  port        = 80
+  port        = 3000
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
   target_type = "ip"
@@ -101,7 +103,7 @@ resource "aws_lb_target_group" "staging" {
 # Production target group — routes to the prod Fargate service.
 resource "aws_lb_target_group" "prod" {
   name        = "${var.project_name}-prod-tg"
-  port        = 80
+  port        = 3000
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
   target_type = "ip"
@@ -136,7 +138,7 @@ resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.this.arn
   port              = 443
   protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-2016-08" # Modern but compatible TLS policy
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06" # TLS 1.3 + 1.2, modern ciphers only
   certificate_arn   = var.certificate_arn
 
   default_action {
@@ -145,6 +147,24 @@ resource "aws_lb_listener" "https" {
       content_type = "text/plain"
       message_body = "404 Not Found"
       status_code  = "404"
+    }
+  }
+}
+
+# ---- HTTP Listener (Redirect) ----------------------------------------------
+# Plain HTTP is accepted ONLY to redirect every request to HTTPS. This prevents
+# unencrypted traffic and downgrade attempts.
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.this.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
     }
   }
 }
