@@ -85,6 +85,8 @@ resource "aws_iam_role_policy" "jenkins_ec2_ssm_param" {
 # Custom policy: deploy new ECS task definitions and update services.
 # Also allows iam:PassRole for the ECS execution and task roles so Jenkins
 # can register task definitions that reference those roles.
+# All actions are scoped to THIS project's resources (cluster, services,
+# task-definition families) rather than "*".
 resource "aws_iam_role_policy" "jenkins_ec2_ecs" {
   name = "${var.project_name}-ecs-deploy"
   role = aws_iam_role.jenkins_ec2.id
@@ -96,14 +98,25 @@ resource "aws_iam_role_policy" "jenkins_ec2_ecs" {
         Effect = "Allow"
         Action = [
           "ecs:RegisterTaskDefinition",
-          "ecs:DescribeTaskDefinition",
+          "ecs:DescribeTaskDefinition"
+        ]
+        Resource = "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "ecs:UpdateService",
-          "ecs:DescribeServices",
+          "ecs:DescribeServices"
+        ]
+        Resource = "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:service/${var.project_name}-cluster/${var.project_name}-*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "ecs:ListServices",
           "ecs:DescribeClusters"
         ]
-        # Allow on any ECS resource in this account (scoped by cluster/service in code)
-        Resource = "*"
+        Resource = "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:cluster/${var.project_name}-cluster"
       },
       {
         Effect = "Allow"
@@ -156,6 +169,8 @@ resource "aws_iam_role" "ecs_execution" {
   name = "${var.project_name}-ecs-execution-role"
 
   # Trust policy: allow ECS tasks service to assume this role.
+  # Confused-deputy protection: the principal must be a task launched in OUR
+  # account and OUR project's cluster (prevents cross-account role stealing).
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -165,6 +180,14 @@ resource "aws_iam_role" "ecs_execution" {
           Service = "ecs-tasks.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+          StringLike = {
+            "aws:SourceArn" = "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:cluster/${var.project_name}-cluster"
+          }
+        }
       }
     ]
   })
@@ -182,6 +205,8 @@ resource "aws_iam_role_policy_attachment" "ecs_execution" {
 
 # Custom policy: add ECR auth and log stream creation permissions.
 # The managed policy doesn't include ECR auth, so we add it here.
+# Image operations are scoped to the app repository; log operations are
+# scoped to this project's ECS log groups.
 resource "aws_iam_role_policy" "ecs_execution_ecr" {
   name = "${var.project_name}-ecs-execution-ecr"
   role = aws_iam_role.ecs_execution.id
@@ -192,12 +217,18 @@ resource "aws_iam_role_policy" "ecs_execution_ecr" {
       {
         Effect = "Allow"
         Action = [
-          "ecr:GetAuthorizationToken",
+          "ecr:GetAuthorizationToken"
+        ]
+        Resource = "*" # GetAuthorizationToken has no resource-level restrictions
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "ecr:BatchCheckLayerAvailability",
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage"
         ]
-        Resource = "*" # ECR auth token doesn't support resource-level restrictions
+        Resource = "arn:aws:ecr:*:${data.aws_caller_identity.current.account_id}:repository/${var.project_name}-app"
       },
       {
         Effect = "Allow"
@@ -205,7 +236,7 @@ resource "aws_iam_role_policy" "ecs_execution_ecr" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "*" # Scoped by log group ARN in practice
+        Resource = "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.project_name}-*:*"
       }
     ]
   })
@@ -221,6 +252,8 @@ resource "aws_iam_role_policy" "ecs_execution_ecr" {
 resource "aws_iam_role" "ecs_task" {
   name = "${var.project_name}-ecs-task-role"
 
+  # Trust policy: allow ECS tasks service to assume this role.
+  # Confused-deputy protection scoped to our account and project cluster.
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -230,6 +263,14 @@ resource "aws_iam_role" "ecs_task" {
           Service = "ecs-tasks.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+          StringLike = {
+            "aws:SourceArn" = "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:cluster/${var.project_name}-cluster"
+          }
+        }
       }
     ]
   })

@@ -28,9 +28,11 @@ resource "aws_instance" "this" {
   iam_instance_profile   = var.iam_instance_profile
 
   # 30 GB gp3 root volume — enough for Jenkins, plugins, Docker images, etc.
+  # Encrypted at rest (default AWS-managed key, no extra cost).
   root_block_device {
     volume_size = 30
     volume_type = "gp3"
+    encrypted   = true
   }
 
   # Bootstrap script with template variables (ECR URL, domain, project name).

@@ -149,10 +149,19 @@ User=jenkins
 Group=jenkins
 WorkingDirectory=/var/lib/jenkins
 Environment=JENKINS_HOME=/var/lib/jenkins
-Environment=JENKINS_ADMIN_PASSWORD=$ADMIN_PASS
 ExecStart=/usr/bin/java -Djenkins.install.runSetupWizard=false -Xmx1024m -jar /usr/share/jenkins/jenkins.war --httpPort=8080
 Restart=on-failure
 RestartSec=10
+
+# ---- Hardening --------------------------------------------------------------
+# The admin password is intentionally NOT passed as a systemd environment
+# variable (it would be world-readable plaintext in the unit file). It lives
+# only in SSM Parameter Store as a SecureString. These directives limit the
+# blast radius if Jenkins is ever compromised.
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/jenkins /var/log/jenkins /var/cache/jenkins
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target

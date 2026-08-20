@@ -13,6 +13,8 @@
 # The container image and environment variables are set at task definition
 # creation time. The Jenkins pipeline updates these by registering new
 # revisions with CI/CD metadata (build number, git info, etc.).
+#
+# Containers run as an unprivileged user on port 3000 (see app/Dockerfile).
 # =============================================================================
 
 # ---- ECS Cluster ------------------------------------------------------------
@@ -41,14 +43,14 @@ locals {
     essential = true # If this container fails, the task stops
     portMappings = [
       {
-        containerPort = 80 # Next.js listens on port 80
+        containerPort = 3000 # Next.js listens on 3000 (non-root container port)
         protocol      = "tcp"
       }
     ]
     logConfiguration = {
       logDriver = "awslogs" # Send logs to CloudWatch Logs
       options = {
-        "awslogs-region"        = data.aws_region.current.region
+        "awslogs-region"        = data.aws_region.current.name
         "awslogs-stream-prefix" = "app" # Prefix for log streams
       }
     }
@@ -213,7 +215,7 @@ resource "aws_ecs_service" "dev" {
   load_balancer {
     target_group_arn = var.alb_dev_tg_arn
     container_name   = "app"
-    container_port   = 80
+    container_port   = 3000
   }
 }
 
@@ -234,7 +236,7 @@ resource "aws_ecs_service" "staging" {
   load_balancer {
     target_group_arn = var.alb_staging_tg_arn
     container_name   = "app"
-    container_port   = 80
+    container_port   = 3000
   }
 }
 
@@ -255,7 +257,7 @@ resource "aws_ecs_service" "prod" {
   load_balancer {
     target_group_arn = var.alb_prod_tg_arn
     container_name   = "app"
-    container_port   = 80
+    container_port   = 3000
   }
 }
 

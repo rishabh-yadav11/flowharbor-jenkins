@@ -15,7 +15,7 @@ variable "private_subnet_ids" {
 }
 
 variable "ecs_task_sg_id" {
-  description = "Security group ID for ECS tasks (allows HTTP:80 from ALB only)"
+  description = "Security group ID for ECS tasks (allows HTTP:3000 from ALB only)"
   type        = string
 }
 
