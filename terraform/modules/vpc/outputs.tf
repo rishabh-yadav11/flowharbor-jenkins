@@ -23,3 +23,8 @@ output "private_subnet_cidrs" {
   description = "List of private subnet CIDR blocks for security group ingress rules"
   value       = aws_subnet.private[*].cidr_block
 }
+
+output "nat_gateway_ids" {
+  description = "List of NAT Gateway IDs (one per AZ) for observability and dependency wiring"
+  value       = aws_nat_gateway.this[*].id
+}

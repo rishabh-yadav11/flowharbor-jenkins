@@ -27,7 +27,7 @@ variable "alb_zone_id" {
 variable "enable_cloudfront" {
   description = "Toggle CloudFront CDN routing for the root domain"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "cloudfront_domain_name" {
@@ -40,4 +40,10 @@ variable "cloudfront_zone_id" {
   description = "CloudFront hosted zone ID — required for CloudFront alias records (always Z2FDTNDATAQYW2)"
   type        = string
   default     = ""
+}
+
+variable "enable_dnssec" {
+  description = "Enable Route53 DNSSEC signing (issue #19). Opt-in; requires us-east-1 KMS key."
+  type        = bool
+  default     = false
 }

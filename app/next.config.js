@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const securityHeaders = [
-  // Strict Transport Security — force HTTPS for 1 year (ignored over plain HTTP).
-  { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+  // Strict Transport Security — force HTTPS for 2 years + preload (issue #19).
+  { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
   // Block MIME-type sniffing.
   { key: "X-Content-Type-Options", value: "nosniff" },
   // Deny framing entirely.

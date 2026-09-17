@@ -44,25 +44,48 @@ resource "aws_internet_gateway" "this" {
   }
 }
 
-# ---- NAT Gateway ------------------------------------------------------------
-# An Elastic IP (EIP) is allocated for the NAT Gateway.
-# The NAT Gateway lives in the first public subnet and provides outbound
-# internet access for private subnet resources (to pull Docker images,
-# apt packages, AWS APIs via non-endpoint services, etc.).
+# ---- NAT Gateways (per AZ) ----------------------------------------------------
+# One EIP + NAT Gateway per AZ so a single-AZ failure does not blackhole all
+# private subnets, and to avoid cross-AZ data charges.
+#
+# STATE MIGRATION: this used to be a single aws_eip.nat / aws_nat_gateway.this
+# in public[0] with one shared private route table. After pulling this change,
+# run once (before apply):
+#   terraform state mv module.vpc.aws_eip.nat module.vpc.aws_eip.nat[0]
+#   terraform state mv module.vpc.aws_nat_gateway.this module.vpc.aws_nat_gateway.this[0]
+#   terraform state mv module.vpc.aws_route_table.private module.vpc.aws_route_table.private[0]
+# (moved blocks below cover the same rename on fresh Terraform >= 1.1 runs.)
+moved {
+  from = aws_eip.nat
+  to   = aws_eip.nat[0]
+}
+
+moved {
+  from = aws_nat_gateway.this
+  to   = aws_nat_gateway.this[0]
+}
+
+moved {
+  from = aws_route_table.private
+  to   = aws_route_table.private[0]
+}
+
 resource "aws_eip" "nat" {
-  domain = "vpc" # Allocate in the VPC domain (not EC2-Classic)
+  count  = length(var.azs) # One per AZ
+  domain = "vpc"           # Allocate in the VPC domain (not EC2-Classic)
 
   tags = {
-    Name = "${var.project_name}-nat-eip"
+    Name = "${var.project_name}-nat-eip-${count.index + 1}"
   }
 }
 
 resource "aws_nat_gateway" "this" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id # Deploy in the first public subnet
+  count         = length(var.azs)
+  allocation_id = aws_eip.nat[count.index].id
+  subnet_id     = aws_subnet.public[count.index].id # Same-AZ public subnet
 
   tags = {
-    Name = "${var.project_name}-nat-gw"
+    Name = "${var.project_name}-nat-gw-${count.index + 1}"
   }
 
   depends_on = [aws_internet_gateway.this]
@@ -124,27 +147,27 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# ---- Private Route Table ----------------------------------------------------
-# Routes all internet-bound traffic through the NAT Gateway.
-# This is more expensive than IGW but necessary for private subnets.
+# ---- Private Route Tables (per AZ) --------------------------------------------
+# One route table per AZ, each pointing at the same-AZ NAT Gateway.
 resource "aws_route_table" "private" {
+  count  = length(var.azs)
   vpc_id = aws_vpc.this.id
 
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.this.id
+    nat_gateway_id = aws_nat_gateway.this[count.index].id
   }
 
   tags = {
-    Name = "${var.project_name}-private-rt"
+    Name = "${var.project_name}-private-rt-${count.index + 1}"
   }
 }
 
-# Associate each private subnet with the private route table.
+# Associate each private subnet with its same-AZ private route table.
 resource "aws_route_table_association" "private" {
   count          = length(var.azs)
   subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private[count.index].id
 }
 
 # =============================================================================
@@ -160,7 +183,23 @@ resource "aws_route_table_association" "private" {
 resource "aws_vpc_endpoint" "s3" {
   vpc_id          = aws_vpc.this.id
   service_name    = "com.amazonaws.${var.aws_region}.s3"
-  route_table_ids = [aws_route_table.private.id]
+  route_table_ids = aws_route_table.private[*].id
+
+  # Least-privilege: ECR layer downloads + artifact/log bucket access only.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action = [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ]
+      Resource = "*"
+    }]
+  })
 
   tags = {
     Name = "${var.project_name}-s3-vpce"
@@ -178,6 +217,25 @@ resource "aws_vpc_endpoint" "ecr_api" {
   security_group_ids  = [aws_security_group.vpce.id]
   private_dns_enabled = true # Use private DNS names (api.ecr.*)
 
+  # Least-privilege: ECR read/auth API calls only.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action = [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:DescribeImages",
+        "ecr:DescribeRepositories",
+        "ecr:GetAuthorizationToken",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:ListImages"
+      ]
+      Resource = "*"
+    }]
+  })
+
   tags = {
     Name = "${var.project_name}-ecr-api-vpce"
   }
@@ -193,6 +251,22 @@ resource "aws_vpc_endpoint" "ecr_dkr" {
   subnet_ids          = aws_subnet.private[*].id
   security_group_ids  = [aws_security_group.vpce.id]
   private_dns_enabled = true
+
+  # Least-privilege: image layer downloads (+ S3 backing store for layers).
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action = [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+        "s3:GetObject"
+      ]
+      Resource = "*"
+    }]
+  })
 
   tags = {
     Name = "${var.project_name}-ecr-dkr-vpce"
@@ -210,6 +284,22 @@ resource "aws_vpc_endpoint" "ssmmessages" {
   security_group_ids  = [aws_security_group.vpce.id]
   private_dns_enabled = true
 
+  # Least-privilege: Session Manager data/control channel only.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action = [
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ]
+      Resource = "*"
+    }]
+  })
+
   tags = {
     Name = "${var.project_name}-ssmmessages-vpce"
   }
@@ -225,6 +315,24 @@ resource "aws_vpc_endpoint" "ec2messages" {
   security_group_ids  = [aws_security_group.vpce.id]
   private_dns_enabled = true
 
+  # Least-privilege: SSM agent messaging only.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action = [
+        "ec2messages:AcknowledgeMessage",
+        "ec2messages:DeleteMessage",
+        "ec2messages:FailMessage",
+        "ec2messages:GetEndpoint",
+        "ec2messages:GetMessages",
+        "ec2messages:SendReply"
+      ]
+      Resource = "*"
+    }]
+  })
+
   tags = {
     Name = "${var.project_name}-ec2messages-vpce"
   }
@@ -239,6 +347,20 @@ resource "aws_vpc_endpoint" "ec2" {
   subnet_ids          = aws_subnet.private[*].id
   security_group_ids  = [aws_security_group.vpce.id]
   private_dns_enabled = true
+
+  # Least-privilege: read-only EC2 metadata used for diagnostics.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action = [
+        "ec2:DescribeInstances",
+        "ec2:DescribeTags"
+      ]
+      Resource = "*"
+    }]
+  })
 
   tags = {
     Name = "${var.project_name}-ec2-vpce"
@@ -256,14 +378,62 @@ resource "aws_vpc_endpoint" "logs" {
   security_group_ids  = [aws_security_group.vpce.id]
   private_dns_enabled = true
 
+  # Least-privilege: container/SSM log delivery only.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action = [
+        "logs:CreateLogStream",
+        "logs:DescribeLogStreams",
+        "logs:PutLogEvents"
+      ]
+      Resource = "*"
+    }]
+  })
+
   tags = {
     Name = "${var.project_name}-logs-vpce"
   }
 }
 
+# ---- SSM Endpoint -----------------------------------------------------------
+# Interface endpoint for the SSM Parameter Store / control plane. Without it,
+# GetParameter/PutParameter calls from private subnets traverse the NAT.
+resource "aws_vpc_endpoint" "ssm" {
+  vpc_id              = aws_vpc.this.id
+  service_name        = "com.amazonaws.${var.aws_region}.ssm"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.vpce.id]
+  private_dns_enabled = true
+
+  # Least-privilege: parameter read/write + instance info for managed nodes.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = "*"
+      Action = [
+        "ssm:DescribeParameters",
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:PutParameter",
+        "ssm:UpdateInstanceInformation"
+      ]
+      Resource = "*"
+    }]
+  })
+
+  tags = {
+    Name = "${var.project_name}-ssm-vpce"
+  }
+}
+
 # ---- VPC Endpoints Security Group -------------------------------------------
-# Allows HTTPS (443) inbound from the VPC CIDR and all outbound traffic.
-# All interface endpoints share this security group.
+# Allows HTTPS (443) inbound from the VPC CIDR and scoped HTTPS-only egress
+# back into the VPC. All interface endpoints share this security group.
 resource "aws_security_group" "vpce" {
   name        = "${var.project_name}-vpce"
   description = "Security group for VPC Interface Endpoints"
@@ -277,10 +447,10 @@ resource "aws_security_group" "vpce" {
   }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1" # All protocols
-    cidr_blocks = ["0.0.0.0/0"]
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp" # HTTPS responses to VPC clients only
+    cidr_blocks = [var.vpc_cidr]
   }
 
   tags = {

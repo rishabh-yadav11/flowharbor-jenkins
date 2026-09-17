@@ -232,6 +232,7 @@ module "ecs" {
   alb_dev_tg_arn         = module.alb.dev_target_group_arn
   alb_staging_tg_arn     = module.alb.staging_target_group_arn
   alb_prod_tg_arn        = module.alb.prod_target_group_arn
+  log_kms_key_id         = module.observability_logging.logs_kms_key_arn
   depends_on             = [module.alb, module.ecr]
 }
 
@@ -272,4 +273,5 @@ module "route53" {
   enable_cloudfront      = var.enable_cloudfront
   cloudfront_domain_name = var.enable_cloudfront ? module.cloudfront[0].domain_name : ""
   cloudfront_zone_id     = var.enable_cloudfront ? module.cloudfront[0].hosted_zone_id : ""
+  enable_dnssec          = var.enable_dnssec
 }

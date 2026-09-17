@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+coverage
+.env*
+*.pem
+*.key
+secrets
+.git
+Jenkinsfile
+*.md
+*.log
+.vscode
+.idea
+.DS_Store

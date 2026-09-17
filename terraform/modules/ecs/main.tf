@@ -39,9 +39,34 @@ resource "aws_ecs_cluster" "this" {
 # NOTE: bootstrap image only — Jenkins promote() replaces it with repo@digest.
 locals {
   container_base = {
-    name      = "app" # Container name within the task
-    image     = "${var.ecr_repository_url}:${var.initial_image_tag}"
-    essential = true # If this container fails, the task stops
+    name                   = "app" # Container name within the task
+    image                  = "${var.ecr_repository_url}:${var.initial_image_tag}"
+    essential              = true   # If this container fails, the task stops
+    user                   = "node" # Run as unprivileged node user (matches Dockerfile USER)
+    readonlyRootFilesystem = true   # Immutable root FS; writable paths via mountPoints
+    privileged             = false  # Never grant extended host privileges
+    linuxParameters = {
+      initProcessEnabled = true # tini-style init for zombie reaping
+    }
+    healthCheck = {
+      command     = ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 60
+    }
+    mountPoints = [
+      {
+        sourceVolume  = "tmp"
+        containerPath = "/tmp"
+        readOnly      = false
+      },
+      {
+        sourceVolume  = "public"
+        containerPath = "/app/public"
+        readOnly      = false
+      }
+    ]
     portMappings = [
       {
         containerPort = 3000 # Next.js listens on 3000 (non-root container port)
@@ -55,6 +80,42 @@ locals {
         "awslogs-stream-prefix" = "app" # Prefix for log streams
       }
     }
+  }
+}
+
+# ---- SSM Parameters for container secrets (issue #15) -------------------------
+# GIT_AUTHOR and PIPELINE_URL are per-environment SecureStrings consumed via
+# the ECS `secrets` block (never plaintext `environment`). Values are managed
+# at deploy time by Jenkins promote() (put-parameter --overwrite); Terraform
+# owns the parameter skeleton only. lifecycle ignore_changes prevents TF from
+# reverting Jenkins-updated values on every apply.
+resource "aws_ssm_parameter" "git_author" {
+  for_each = toset(["dev", "staging", "prod"])
+  name     = "${var.ssm_parameter_prefix}/${each.key}/GIT_AUTHOR"
+  type     = "SecureString"
+  value    = "none"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  tags = {
+    Name = "${var.project_name}-${each.key}-git-author"
+  }
+}
+
+resource "aws_ssm_parameter" "pipeline_url" {
+  for_each = toset(["dev", "staging", "prod"])
+  name     = "${var.ssm_parameter_prefix}/${each.key}/PIPELINE_URL"
+  type     = "SecureString"
+  value    = "none"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  tags = {
+    Name = "${var.project_name}-${each.key}-pipeline-url"
   }
 }
 
@@ -83,6 +144,8 @@ resource "aws_ecs_task_definition" "dev" {
   }
 
   # Merge base config with dev-specific values.
+  # NOTE: GIT_AUTHOR/PIPELINE_URL are delivered via `secrets` (SSM SecureString),
+  # never plaintext `environment` (issue #15).
   container_definitions = jsonencode([
     merge(local.container_base, {
       image = "${var.ecr_repository_url}:${var.initial_image_tag}"
@@ -98,12 +161,22 @@ resource "aws_ecs_task_definition" "dev" {
         { name = "BUILD_NUMBER", value = "0" },
         { name = "GIT_COMMIT", value = "none" },
         { name = "GIT_BRANCH", value = "none" },
-        { name = "GIT_AUTHOR", value = "none" },
-        { name = "TIMESTAMP", value = "none" },
-        { name = "PIPELINE_URL", value = "none" }
+        { name = "TIMESTAMP", value = "none" }
+      ]
+      secrets = [
+        { name = "GIT_AUTHOR", valueFrom = aws_ssm_parameter.git_author["dev"].arn },
+        { name = "PIPELINE_URL", valueFrom = aws_ssm_parameter.pipeline_url["dev"].arn }
       ]
     })
   ])
+
+  volume {
+    name = "tmp"
+  }
+
+  volume {
+    name = "public"
+  }
 
   tags = {
     Name = "${var.project_name}-dev"
@@ -139,12 +212,22 @@ resource "aws_ecs_task_definition" "staging" {
         { name = "BUILD_NUMBER", value = "0" },
         { name = "GIT_COMMIT", value = "none" },
         { name = "GIT_BRANCH", value = "none" },
-        { name = "GIT_AUTHOR", value = "none" },
-        { name = "TIMESTAMP", value = "none" },
-        { name = "PIPELINE_URL", value = "none" }
+        { name = "TIMESTAMP", value = "none" }
+      ]
+      secrets = [
+        { name = "GIT_AUTHOR", valueFrom = aws_ssm_parameter.git_author["staging"].arn },
+        { name = "PIPELINE_URL", valueFrom = aws_ssm_parameter.pipeline_url["staging"].arn }
       ]
     })
   ])
+
+  volume {
+    name = "tmp"
+  }
+
+  volume {
+    name = "public"
+  }
 
   tags = {
     Name = "${var.project_name}-staging"
@@ -180,12 +263,22 @@ resource "aws_ecs_task_definition" "prod" {
         { name = "BUILD_NUMBER", value = "0" },
         { name = "GIT_COMMIT", value = "none" },
         { name = "GIT_BRANCH", value = "none" },
-        { name = "GIT_AUTHOR", value = "none" },
-        { name = "TIMESTAMP", value = "none" },
-        { name = "PIPELINE_URL", value = "none" }
+        { name = "TIMESTAMP", value = "none" }
+      ]
+      secrets = [
+        { name = "GIT_AUTHOR", valueFrom = aws_ssm_parameter.git_author["prod"].arn },
+        { name = "PIPELINE_URL", valueFrom = aws_ssm_parameter.pipeline_url["prod"].arn }
       ]
     })
   ])
+
+  volume {
+    name = "tmp"
+  }
+
+  volume {
+    name = "public"
+  }
 
   tags = {
     Name = "${var.project_name}-prod"
@@ -302,21 +395,25 @@ resource "aws_ecs_service" "prod" {
 # CloudWatch Log Groups
 # =============================================================================
 # Each environment has its own log group for container logs.
-# Retention is set to 7 days to balance debugging needs with storage costs.
+# Retention: 30 days for dev/staging, 90 days for prod (issue #15).
+# Encrypted with the observability-logging CMK when var.log_kms_key_id is set.
 
 resource "aws_cloudwatch_log_group" "dev" {
   name              = "/ecs/${var.project_name}-dev"
-  retention_in_days = 7
+  retention_in_days = 30
+  kms_key_id        = var.log_kms_key_id
 }
 
 resource "aws_cloudwatch_log_group" "staging" {
   name              = "/ecs/${var.project_name}-staging"
-  retention_in_days = 7
+  retention_in_days = 30
+  kms_key_id        = var.log_kms_key_id
 }
 
 resource "aws_cloudwatch_log_group" "prod" {
   name              = "/ecs/${var.project_name}-prod"
-  retention_in_days = 7
+  retention_in_days = 90
+  kms_key_id        = var.log_kms_key_id
 }
 
 # ---- Data Sources -----------------------------------------------------------

@@ -55,10 +55,10 @@ resource "aws_ecr_lifecycle_policy" "this" {
       },
       {
         rulePriority = 2
-        description  = "Keep last 50 tagged images"
+        description  = "Keep last 50 tagged images (semver + prerelease/build metadata)"
         selection = {
           tagStatus     = "tagged"
-          tagPrefixList = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+          tagPrefixList = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "v"]
           countType     = "imageCountMoreThan"
           countNumber   = 50
         }

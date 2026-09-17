@@ -61,8 +61,10 @@ resource "aws_iam_role_policy_attachment" "jenkins_master_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Master manages all Jenkins SSM parameters (writes admin password, master URL,
-# slave secret, ready marker during bootstrap).
+# Master manages exactly the four Jenkins SSM parameters bootstrapped in
+# user-data/jenkins-master.sh (and pre-created in modules/jenkins-master):
+# jenkins-admin-password, jenkins-master-url, jenkins-slave-secret,
+# jenkins-master-ready. No wildcard path — new params require a policy change.
 resource "aws_iam_role_policy" "jenkins_master_ssm_param" {
   name = "${var.project_name}-master-ssm-param"
   role = aws_iam_role.jenkins_master.id
@@ -76,8 +78,12 @@ resource "aws_iam_role_policy" "jenkins_master_ssm_param" {
           "ssm:PutParameter",
           "ssm:GetParameter"
         ]
-        # Master owns the full project parameter path.
-        Resource = "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/*"
+        Resource = [
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/jenkins-admin-password",
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/jenkins-master-url",
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/jenkins-slave-secret",
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/jenkins-master-ready"
+        ]
       }
     ]
   })
@@ -115,6 +121,8 @@ resource "aws_iam_role_policy" "jenkins_master_ecr_read" {
 }
 
 # Read-only EC2 metadata for diagnostics.
+# Resource "*" is required: ec2:DescribeInstances does not support
+# resource-level permissions.
 resource "aws_iam_role_policy" "jenkins_master_ec2_describe" {
   name = "${var.project_name}-master-ec2-describe"
   role = aws_iam_role.jenkins_master.id
@@ -311,6 +319,8 @@ resource "aws_iam_role_policy" "jenkins_slave_ecs" {
 }
 
 # Custom policy: allow describing EC2 instances (used for build metadata).
+# Resource "*" is required: ec2:DescribeInstances does not support
+# resource-level permissions.
 resource "aws_iam_role_policy" "jenkins_slave_ec2_describe" {
   name = "${var.project_name}-slave-ec2-describe"
   role = aws_iam_role.jenkins_slave.id
@@ -324,6 +334,31 @@ resource "aws_iam_role_policy" "jenkins_slave_ec2_describe" {
           "ec2:DescribeInstances"
         ]
         Resource = "*"
+      }
+    ]
+  })
+}
+
+# Slave writes per-env container secrets at deploy time (issue #15).
+# Jenkins promote() does put-parameter --overwrite on exactly these six params
+# (GIT_AUTHOR/PIPELINE_URL x dev/staging/prod). No access to admin password or
+# bootstrap params; no DeleteParameter.
+resource "aws_iam_role_policy" "jenkins_slave_ssm_secrets_write" {
+  name = "${var.project_name}-slave-ssm-secrets-write"
+  role = aws_iam_role.jenkins_slave.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:PutParameter"
+        ]
+        Resource = [
+          for env in ["dev", "staging", "prod"] :
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/${env}/*"
+        ]
       }
     ]
   })
@@ -414,6 +449,40 @@ resource "aws_iam_role_policy" "ecs_execution_ecr" {
           "logs:PutLogEvents"
         ]
         Resource = "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/ecs/${var.project_name}-*:*"
+      }
+    ]
+  })
+}
+
+# Custom policy: allow the ECS agent to resolve container `secrets` from SSM
+# (issue #15: GIT_AUTHOR/PIPELINE_URL per-env SecureStrings) and decrypt them
+# with the SSM default key. Scoped to this project's parameter path.
+resource "aws_iam_role_policy" "ecs_execution_secrets" {
+  name = "${var.project_name}-ecs-execution-secrets"
+  role = aws_iam_role.ecs_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameters",
+          "ssm:GetParameter"
+        ]
+        Resource = "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = "arn:aws:kms:*:${data.aws_caller_identity.current.account_id}:key/*"
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "ssm.*.amazonaws.com"
+          }
+        }
       }
     ]
   })
