@@ -80,7 +80,8 @@ resource "aws_lb_target_group" "dev" {
   target_type = "ip" # Target by IP address (for Fargate tasks)
 
   health_check {
-    path                = "/"
+    path                = "/api/health"
+    matcher             = "200"
     healthy_threshold   = 2
     unhealthy_threshold = 3
     interval            = 30
@@ -100,7 +101,8 @@ resource "aws_lb_target_group" "staging" {
   target_type = "ip"
 
   health_check {
-    path                = "/"
+    path                = "/api/health"
+    matcher             = "200"
     healthy_threshold   = 2
     unhealthy_threshold = 3
     interval            = 30
@@ -120,7 +122,8 @@ resource "aws_lb_target_group" "prod" {
   target_type = "ip"
 
   health_check {
-    path                = "/"
+    path                = "/api/health"
+    matcher             = "200"
     healthy_threshold   = 2
     unhealthy_threshold = 3
     interval            = 30

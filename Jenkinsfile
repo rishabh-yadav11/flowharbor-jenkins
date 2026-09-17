@@ -25,6 +25,48 @@
 // task definition revision and triggering a rolling service update.
 // =============================================================================
 
+// ---- Shared helpers (issue #20 hardening) -----------------------------------
+// Validate ECR URL against a strict allowlist and return the repository path
+// (supports namespaced team/app). Fail closed to block token exfiltration to
+// a foreign registry via a poisoned credential.
+def ecrRepoName(String url) {
+    def v = (url ?: '').trim()
+    if (!(v ==~ /^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?\/[a-z0-9]+(?:[._\/-][a-z0-9]+)*$/)) {
+        error "REFUSING ECR op: invalid ECR_REPOSITORY '${v.take(80)}'"
+    }
+    def parts = v.tokenize('/')
+    if (parts.size() < 2) {
+        error "REFUSING ECR op: no repository path in '${v.take(80)}'"
+    }
+    return parts.drop(1).join('/')
+}
+
+// Fixed-width box cell: truncate then pad so banner borders never misalign.
+def box(String s, int n) {
+    return (s ?: '').take(n).padRight(n)
+}
+
+// Semver compare: -1 / 0 / 1. Non-semver values sort below valid releases.
+def compareSemver(String a, String b) {
+    def parse = { String v ->
+        def m = (v?.trim() ?: '') =~ /^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/
+        if (!m.find()) return null
+        return [m.group(1).toInteger(), m.group(2).toInteger(), m.group(3).toInteger(), m.group(4) ?: '']
+    }
+    def pa = parse(a)
+    def pb = parse(b)
+    if (pa == null && pb == null) return 0
+    if (pa == null) return -1
+    if (pb == null) return 1
+    for (int i = 0; i < 3; i++) {
+        if (pa[i] != pb[i]) return pa[i] < pb[i] ? -1 : 1
+    }
+    if (pa[3] == pb[3]) return 0
+    if (pa[3] == '') return 1
+    if (pb[3] == '') return -1
+    return pa[3] <=> pb[3]
+}
+
 // ---- Pipeline Definition ----------------------------------------------------
 pipeline {
     agent { label 'jenkins-slave' }
@@ -116,10 +158,14 @@ pipeline {
                     env.GIT_TAG_SHA = tagSha
 
                     // Capture git metadata AFTER the tag checkout so it reflects
-                    // the exact released commit being deployed.
-                    env.GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    env.GIT_BRANCH = env.GIT_TAG
-                    env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
+                    // the exact released commit being deployed. Sanitize author
+                    // (issue #20): user.name is attacker-controlled; strip
+                    // newlines (log-spoof), allowlist chars, truncate to 32.
+                    env.GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim().take(12)
+                    env.GIT_BRANCH = env.GIT_TAG.take(32)
+                    def rawAuthor = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
+                    env.GIT_AUTHOR = rawAuthor.replaceAll(/[\r\n]+/, ' ').replaceAll(/[^\p{L}\p{N} ._\-@]+/, '').trim().take(32)
+                    if (!env.GIT_AUTHOR) { env.GIT_AUTHOR = 'unknown' }
                     echo "  Commit:  ${env.GIT_COMMIT_SHORT}"
                     echo "  Author:  ${env.GIT_AUTHOR}"
                 }
@@ -146,10 +192,13 @@ pipeline {
                         sh "npm ci --ignore-scripts && npm audit --audit-level=high"
                     }
 
-                    sh "docker build -t ${ECR_REPOSITORY}:${env.GIT_TAG} -f app/Dockerfile app/"
+                    // Validate ECR before any docker login (fail closed, issue #20).
+                    def REPO_NAME = ecrRepoName(ECR_REPOSITORY)
+                    echo "  ECR repo:  ${REPO_NAME}"
+                    sh "docker build -t \"${ECR_REPOSITORY}:${env.GIT_TAG}\" -f app/Dockerfile app/"
 
                     def imageInspect = sh(
-                        script: "docker images ${ECR_REPOSITORY}:${env.GIT_TAG} --format '{{.CreatedSince}}'",
+                        script: "docker images \"${ECR_REPOSITORY}:${env.GIT_TAG}\" --format '{{.CreatedSince}}'",
                         returnStdout: true
                     ).trim()
                     echo "  Built:   ${imageInspect}"
@@ -162,15 +211,17 @@ pipeline {
         stage('Push to ECR') {
             steps {
                 script {
+                    // Single validated repo name (issue #20: no split('/')[1]).
+                    def REPO_NAME = ecrRepoName(ECR_REPOSITORY)
                     sh """
                         aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | \
-                        docker login --username AWS --password-stdin ${ECR_REPOSITORY}
+                        docker login --username AWS --password-stdin "${ECR_REPOSITORY}"
                     """
 
-                    sh "docker push ${ECR_REPOSITORY}:${env.GIT_TAG}"
+                    sh "docker push \"${ECR_REPOSITORY}:${env.GIT_TAG}\""
 
                     env.IMAGE_DIGEST = sh(
-                        script: "aws ecr describe-images --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-ids imageTag=${env.GIT_TAG} --query 'imageDetails[0].imageDigest' --output text",
+                        script: "aws ecr describe-images --repository-name \"${REPO_NAME}\" --image-ids imageTag=\"${env.GIT_TAG}\" --query 'imageDetails[0].imageDigest' --output text",
                         returnStdout: true
                     ).trim()
                     if (!env.IMAGE_DIGEST || env.IMAGE_DIGEST == "None") {
@@ -178,16 +229,16 @@ pipeline {
                     }
                     env.IMAGE_URI_BY_DIGEST = "${ECR_REPOSITORY}@${env.IMAGE_DIGEST}"
                     // Cross-verify local push matches remote digest.
-                    def repoDigests = sh(script: "docker inspect --format='{{.RepoDigests}}' ${ECR_REPOSITORY}:${env.GIT_TAG}", returnStdout: true).trim()
+                    def repoDigests = sh(script: "docker inspect --format='{{.RepoDigests}}' \"${ECR_REPOSITORY}:${env.GIT_TAG}\"", returnStdout: true).trim()
                     echo "  RepoDigests: ${repoDigests}"
                     if (!repoDigests.contains(env.IMAGE_DIGEST)) {
                         error "Digest mismatch: local RepoDigests ${repoDigests} does not contain ${env.IMAGE_DIGEST}"
                     }
 
                     // Scan gate: wait for scan then fail on CRITICAL findings.
-                    sh "aws ecr wait image-scan-complete --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-id imageTag=${env.GIT_TAG} || true"
+                    sh "aws ecr wait image-scan-complete --repository-name \"${REPO_NAME}\" --image-id imageTag=\"${env.GIT_TAG}\" || true"
                     def scanJson = sh(
-                        script: "aws ecr describe-image-scan-findings --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-id imageTag=${env.GIT_TAG} --query 'imageScanFindings.findingSeverityCounts' --output json || echo '{}'",
+                        script: "aws ecr describe-image-scan-findings --repository-name \"${REPO_NAME}\" --image-id imageTag=\"${env.GIT_TAG}\" --query 'imageScanFindings.findingSeverityCounts' --output json --no-cli-pager || echo '{}'",
                         returnStdout: true
                     ).trim()
                     echo "  Scan findings: ${scanJson}"
@@ -250,26 +301,28 @@ pipeline {
                     dev:     "Dev",
                     staging: "Staging",
                     prod:    "Production"
-                ][TARGET_ENV]
+                ][TARGET_ENV] ?: "Unknown"
                 def envUrl = [
                     dev:     "https://testing.flowharbor.in",
                     staging: "https://staging.flowharbor.in",
                     prod:    "https://flowharbor.in"
-                ][TARGET_ENV]
+                ][TARGET_ENV] ?: "#"
+                def shortImage = "${ECR_REPOSITORY}:${env.GIT_TAG}".take(38)
+                def shortPipeline = (PIPELINE_URL ?: '').take(30)
                 echo ""
                 echo "╔══════════════════════════════════════════════════╗"
                 echo "║           DEPLOYMENT COMPLETE                    ║"
                 echo "╠══════════════════════════════════════════════════╣"
-                echo "║  Env:     ${envLabel.padRight(28)}           ║"
-                echo "║  Tag:     ${env.GIT_TAG.padRight(28)}           ║"
-                echo "║  Commit:  ${GIT_COMMIT_SHORT.padRight(28)}           ║"
-                echo "║  Author:  ${GIT_AUTHOR.padRight(28)}           ║"
-                echo "║  Image:   ${ECR_REPOSITORY}:${env.GIT_TAG}   ║"
-                echo "║  Digest:  ${(env.IMAGE_DIGEST ?: 'unknown').take(38).padRight(28)}           ║"
+                echo "║  Env:     ${box(envLabel, 28)}           ║"
+                echo "║  Tag:     ${box(env.GIT_TAG, 28)}           ║"
+                echo "║  Commit:  ${box(GIT_COMMIT_SHORT, 28)}           ║"
+                echo "║  Author:  ${box(GIT_AUTHOR, 28)}           ║"
+                echo "║  Image:   ${box(shortImage, 28)}           ║"
+                echo "║  Digest:  ${box((env.IMAGE_DIGEST ?: 'unknown').take(38), 28)}           ║"
                 echo "╠══════════════════════════════════════════════════╣"
-                echo "║  URL:     ${envUrl.padRight(28)}  ║"
+                echo "║  URL:     ${box(envUrl, 28)}  ║"
                 echo "╠══════════════════════════════════════════════════╣"
-                echo "║  Jenkins: ${PIPELINE_URL}  ║"
+                echo "║  Jenkins: ${box(shortPipeline, 28)}  ║"
                 echo "╚══════════════════════════════════════════════════╝"
                 echo ""
             }
@@ -320,13 +373,13 @@ def promote(envName) {
         dev:     "Dev",
         staging: "Staging",
         prod:    "Production"
-    ][envName]
+    ][envName] ?: "Unknown"
 
     def envUrl = [
         dev:     "https://testing.flowharbor.in",
         staging: "https://staging.flowharbor.in",
         prod:    "https://flowharbor.in"
-    ][envName]
+    ][envName] ?: "#"
 
     // Log the deployment target for pipeline visibility.
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -375,6 +428,16 @@ def promote(envName) {
     // If the target env already runs this exact image+env, skip the update to
     // avoid deploy churn / DoS via repeated identical deployments.
     def imageChanged = (containerDef.image != deployImage)
+    // ---- Downgrade guard (issue #20) ------------------------------------------
+    // Refuse to deploy an older semver VERSION over a newer one (silent
+    // rollback would reintroduce CVEs). Same-version rebuilds allowed.
+    def currentVersion = ((containerDef.environment ?: []).find { it.name == 'VERSION' })?.value ?: ''
+    if (imageChanged && currentVersion?.trim() && env.GIT_TAG?.trim()) {
+        def cmp = compareSemver(env.GIT_TAG, currentVersion)
+        if (cmp < 0) {
+            error "REFUSING downgrade: ${currentVersion} -> ${env.GIT_TAG} in ${envName}. Deploy a version >= current."
+        }
+    }
     if (!imageChanged) {
         echo "No-op: image ${deployImage} already deployed to ${envName}; skipping update."
         return

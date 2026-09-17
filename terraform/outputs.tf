@@ -50,6 +50,11 @@ output "ecr_repository_url" {
   value       = module.ecr.repository_url
 }
 
+output "ecr_repository_name" {
+  description = "ECR repository name — preferred by Jenkins (avoids fragile URL parsing, issue #20)"
+  value       = module.ecr.repository_name
+}
+
 # ---- Admin Commands ---------------------------------------------------------
 # Helpful CLI commands for retrieving sensitive credentials.
 

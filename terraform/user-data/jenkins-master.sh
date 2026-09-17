@@ -286,6 +286,15 @@ done
 # Store the ECR repository URL as a Jenkins "string" credential so the pipeline
 # can use it via `credentials('ecr-repository-url')`.
 # This avoids hardcoding the URL in the Jenkinsfile.
+# NOTE (issue #20): ECR URL is non-secret routing data; GLOBAL scope is required
+# for pipeline `credentials()` lookup. Defense-in-depth lives in the Jenkinsfile
+# `ecrRepoName()` allowlist (fail-closed on poisoned/malformed values) — see also
+# `ecr_repository_name` output for a parse-free alternative.
+# Fail fast if Terraform rendered a malformed URL so it never becomes a credential.
+if ! printf '%s' "${ecr_repository_url}" | grep -Eq '^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(\.cn)?/[a-z0-9]+([._/-][a-z0-9]+)*$'; then
+  echo "ERROR: malformed ecr_repository_url: ${ecr_repository_url}" >&2
+  exit 1
+fi
 curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
   -H "Jenkins-Crumb: $CRUMB" \
   -X POST 'http://localhost:8080/scriptText' \

@@ -13,3 +13,8 @@ output "repository_arn" {
   description = "ARN of the ECR repository (e.g., arn:aws:ecr:ap-south-1:123456789012:repository/flowharbor-app) — used for IAM policy resource restrictions"
   value       = aws_ecr_repository.this.arn
 }
+
+output "repository_name" {
+  description = "Name of the ECR repository (e.g., flowharbor-app) — preferred by Jenkins to avoid fragile URL parsing"
+  value       = aws_ecr_repository.this.name
+}
