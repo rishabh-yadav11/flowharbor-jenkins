@@ -174,6 +174,9 @@ resource "aws_lb_listener" "http" {
 # Priority values are spaced to allow inserting new rules without renumbering.
 
 # jenkins.flowharbor.in → Jenkins Master
+# Network guard lives in the WAF module (issue #4): the shared ALB stays
+# internet-facing for testing/staging/prod, while the WAF IP-allowlist +
+# /login rate-limit rules gate jenkins.<domain> at L7.
 resource "aws_lb_listener_rule" "jenkins" {
   listener_arn = aws_lb_listener.https.arn
   priority     = 10

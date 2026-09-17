@@ -181,6 +181,22 @@ module "alb" {
 }
 
 # =============================================================================
+# Module: WAF (issue #4)
+# =============================================================================
+# REGIONAL WAFv2 Web ACL on the shared ALB: Jenkins IP allowlist (office/VPN
+# egress only, default deny), /login rate limit, + AWS managed rules.
+# Default action is allow so testing/staging/prod are unaffected.
+module "waf" {
+  source                     = "./modules/waf"
+  project_name               = var.project_name
+  alb_arn                    = module.alb.arn
+  domain_name                = var.domain_name
+  jenkins_allowed_ipv4_cidrs = var.jenkins_allowed_ipv4_cidrs
+  jenkins_login_rate_limit   = var.jenkins_login_rate_limit
+  depends_on                 = [module.alb]
+}
+
+# =============================================================================
 # Module: ECS (Fargate)
 # =============================================================================
 # The ECS cluster runs three Fargate services (dev/staging/prod), each with a
