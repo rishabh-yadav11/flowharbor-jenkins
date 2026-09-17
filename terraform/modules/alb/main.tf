@@ -225,6 +225,12 @@ resource "aws_lb_listener_rule" "staging" {
 }
 
 # flowharbor.in → Production
+# L7 origin-bypass guard: when var.origin_verify_value is set, the rule
+# requires BOTH Host == flowharbor.in AND the secret CloudFront header.
+# Direct-to-ALB requests (curl --resolve / -H "Host: flowharbor.in" without
+# the header) match no rule and fall through to the listener default 404.
+# Dev/staging/jenkins rules intentionally have no header condition — they
+# are served directly, not through CloudFront.
 resource "aws_lb_listener_rule" "prod" {
   listener_arn = aws_lb_listener.https.arn
   priority     = 40
@@ -237,6 +243,16 @@ resource "aws_lb_listener_rule" "prod" {
   condition {
     host_header {
       values = [var.domain_name] # Root domain (no subdomain)
+    }
+  }
+
+  dynamic "condition" {
+    for_each = var.origin_verify_value != null && var.origin_verify_value != "" ? [1] : []
+    content {
+      http_header {
+        http_header_name = var.origin_verify_header
+        values           = [var.origin_verify_value]
+      }
     }
   }
 }

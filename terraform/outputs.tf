@@ -33,8 +33,9 @@ output "production_url" {
 # Raw DNS names for the ALB and CloudFront, useful for debugging or CNAME config.
 
 output "alb_dns_name" {
-  description = "ALB DNS name — the load balancer's AWS-assigned hostname"
+  description = "ALB DNS name — SENSITIVE: direct-to-origin hostname, do not publish. Prod traffic must go through CloudFront; direct requests without the origin-verify header get the listener default 404."
   value       = module.alb.dns_name
+  sensitive   = true
 }
 
 output "cloudfront_domain_name" {

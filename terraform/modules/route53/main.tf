@@ -58,6 +58,24 @@ resource "aws_route53_record" "staging" {
   }
 }
 
+# ---- Origin Subdomain (CloudFront → ALB) -----------------------------------
+# origin.<domain> is the cert-matched hostname CloudFront uses as its origin
+# (see cloudfront module). The wildcard ACM cert (*.<domain>) covers it, so
+# the https-only origin TLS handshake validates — using the raw ALB DNS name
+# would fail verification. Never point end users here; it exists so the
+# origin has a hostname the ALB certificate actually serves.
+resource "aws_route53_record" "origin" {
+  zone_id = var.hosted_zone_id
+  name    = "origin.${var.domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = var.alb_dns_name
+    zone_id                = var.alb_zone_id
+    evaluate_target_health = true
+  }
+}
+
 # ---- Root Domain (Production) -----------------------------------------------
 # When CloudFront is enabled: flowharbor.in routes through CloudFront, which
 # forwards to the ALB. This provides CDN caching, edge TLS termination, and

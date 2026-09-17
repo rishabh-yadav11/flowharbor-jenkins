@@ -15,26 +15,45 @@
 # ---- ALB Security Group -----------------------------------------------------
 # The ALB is internet-facing, so it must accept HTTPS (443) from anywhere.
 # It needs unrestricted egress to forward requests to targets.
+#
+# Origin-bypass note (issue #3): the ideal is to allow 443 ONLY from the
+# CloudFront origin-facing managed prefix list. That is incompatible with a
+# single ALB that also serves direct hosts (jenkins/testing/staging), so it
+# is gated behind var.alb_restrict_to_cloudfront (default false). Prod bypass
+# via direct-to-ALB is blocked at L7 by the ALB prod-rule secret-header
+# condition; enable strict SG mode only after splitting prod to its own ALB.
+data "aws_ec2_managed_prefix_list" "cloudfront_origin" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
 resource "aws_security_group" "alb" {
   name        = "${var.project_name}-alb-sg"
   description = "Controls traffic to/from the Application Load Balancer"
   vpc_id      = var.vpc_id
 
-  # Allow HTTP traffic from the internet — used ONLY for the 301 redirect
-  # listener to HTTPS (no plaintext content is ever served).
+  # Allow HTTP traffic — used ONLY for the 301 redirect listener to HTTPS
+  # (no plaintext content is ever served). In strict CloudFront-only mode
+  # this is scoped to the CloudFront origin-facing prefix list.
   ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    cidr_blocks     = var.alb_restrict_to_cloudfront ? null : ["0.0.0.0/0"]
+    prefix_list_ids = var.alb_restrict_to_cloudfront ? [
+      data.aws_ec2_managed_prefix_list.cloudfront_origin.id
+    ] : null
   }
 
-  # Allow HTTPS traffic from the internet (TLS termination at ALB).
+  # Allow HTTPS traffic (TLS termination at ALB). Open by default for direct
+  # hosts; set alb_restrict_to_cloudfront=true to scope to CloudFront only.
   ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    cidr_blocks     = var.alb_restrict_to_cloudfront ? null : ["0.0.0.0/0"]
+    prefix_list_ids = var.alb_restrict_to_cloudfront ? [
+      data.aws_ec2_managed_prefix_list.cloudfront_origin.id
+    ] : null
   }
 
   # Allow all outbound traffic to reach target groups and AWS services.

@@ -9,7 +9,7 @@
 #   - DDoS protection (AWS Shield Standard included)
 #   - Caching of static assets (TTL up to 1 day)
 #   - Geographic restriction capabilities (currently unrestricted)
-#   - Custom header (X-Origin: cloudfront) to verify requests originate from CF
+#   - Custom header (X-Origin-Verify: secret) to verify requests originate from CF
 #
 # Only the production domain routes through CloudFront. Dev and staging go
 # directly to the ALB.
@@ -76,12 +76,13 @@ resource "aws_cloudfront_distribution" "this" {
   aliases = [var.domain_name]
 
   # ---- Origin: ALB ----------------------------------------------------------
-  # Traffic is forwarded to the ALB's DNS name over HTTP (TLS is between
-  # viewer and CloudFront, then CloudFront and ALB use HTTP internally).
-  # SECURITY NOTE: origin_protocol_policy is "http-only" because the ALB only
-  # serves the CloudFront ACM cert regionally; upgrading to https-only would
-  # require an ALB listener/TLS setup for the CF↔origin hop. The CF↔ALB path
-  # stays inside AWS, so exposure is limited. Review before a production rollout.
+  # Traffic is forwarded to the cert-matched origin hostname
+  # (origin.<domain> → ALB alias, covered by the wildcard ACM cert) over
+  # HTTPS so the CloudFront↔ALB hop is encrypted and the origin certificate
+  # can be validated against a hostname the ALB actually serves. Pass the
+  # raw ALB DNS name here will fail TLS verification (ALB serves the
+  # flowharbor.in cert, not *.elb.amazonaws.com) — always use the
+  # origin.<domain> alias (see route53 module).
   origin {
     domain_name = var.alb_domain_name
     origin_id   = "alb-origin"
@@ -89,15 +90,18 @@ resource "aws_cloudfront_distribution" "this" {
     custom_origin_config {
       http_port              = 80
       https_port             = 443
-      origin_protocol_policy = "http-only" # CloudFront → ALB over HTTP
+      origin_protocol_policy = "https-only" # CloudFront → ALB over TLS
       origin_ssl_protocols   = ["TLSv1.2"]
     }
 
-    # Custom header so the ALB can verify requests come from CloudFront.
-    # This prevents bypassing the CDN for production traffic.
+    # Secret header the ALB validates on the prod listener rule. This is the
+    # L7 origin-bypass guard: requests for flowharbor.in that arrive without
+    # this exact header value fall through to the listener default 404.
+    # The value is a per-stack secret (TF_VAR), never the guessable
+    # literal "cloudfront".
     custom_header {
-      name  = "X-Origin"
-      value = "cloudfront"
+      name  = var.origin_verify_header
+      value = var.origin_verify_value
     }
   }
 

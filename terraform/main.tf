@@ -76,10 +76,11 @@ module "vpc" {
 # Jenkins Master (8080 from ALB + slave, 50000 from slave), Jenkins Slave
 # (outbound-only), and ECS tasks (80 from ALB).
 module "security_groups" {
-  source               = "./modules/security-groups"
-  vpc_id               = module.vpc.vpc_id
-  project_name         = var.project_name
-  private_subnet_cidrs = module.vpc.private_subnet_cidrs
+  source                     = "./modules/security-groups"
+  vpc_id                     = module.vpc.vpc_id
+  project_name               = var.project_name
+  private_subnet_cidrs       = module.vpc.private_subnet_cidrs
+  alb_restrict_to_cloudfront = var.alb_restrict_to_cloudfront
 }
 
 # =============================================================================
@@ -167,15 +168,16 @@ module "jenkins_master" {
 #   - flowharbor.in         → Production target group
 # TLS is terminated at the ALB using the ACM certificate.
 module "alb" {
-  source            = "./modules/alb"
-  project_name      = var.project_name
-  vpc_id            = module.vpc.vpc_id
-  subnet_ids        = module.vpc.public_subnet_ids
-  security_group_id = module.security_groups.alb_sg_id
-  certificate_arn   = module.acm.alb_certificate_arn
-  domain_name       = var.domain_name
-  jenkins_target_ip = module.jenkins_master.private_ip
-  depends_on        = [module.jenkins_master, module.acm]
+  source              = "./modules/alb"
+  project_name        = var.project_name
+  vpc_id              = module.vpc.vpc_id
+  subnet_ids          = module.vpc.public_subnet_ids
+  security_group_id   = module.security_groups.alb_sg_id
+  certificate_arn     = module.acm.alb_certificate_arn
+  domain_name         = var.domain_name
+  jenkins_target_ip   = module.jenkins_master.private_ip
+  origin_verify_value = var.enable_cloudfront ? var.cloudfront_origin_verify_token : null
+  depends_on          = [module.jenkins_master, module.acm]
 }
 
 # =============================================================================
@@ -206,13 +208,14 @@ module "ecs" {
 # at the edge. Only the root domain (flowharbor.in) goes through CloudFront;
 # testing and staging subdomains go directly to the ALB.
 module "cloudfront" {
-  count           = var.enable_cloudfront ? 1 : 0
-  source          = "./modules/cloudfront"
-  domain_name     = var.domain_name
-  alb_domain_name = module.alb.dns_name
-  certificate_arn = module.acm.cloudfront_certificate_arn
-  project_name    = var.project_name
-  depends_on      = [module.alb, module.acm]
+  count               = var.enable_cloudfront ? 1 : 0
+  source              = "./modules/cloudfront"
+  domain_name         = var.domain_name
+  alb_domain_name     = "origin.${var.domain_name}"
+  certificate_arn     = module.acm.cloudfront_certificate_arn
+  project_name        = var.project_name
+  origin_verify_value = var.cloudfront_origin_verify_token
+  depends_on          = [module.alb, module.acm]
 }
 
 # =============================================================================
