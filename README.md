@@ -1,4 +1,4 @@
-# FlowHarbor — Prod-Grade CI/CD Case Study (Jenkins + ECS Fargate + Terraform)
+# FlowHarbor (Jenkins + ECS Fargate + Terraform)
 
 > A tag-based, per-environment delivery platform for a Next.js app on AWS: Jenkins CI/CD → ECR (immutable, scanned) → ECS Fargate (digest-pinned, rolling) behind ALB + optional CloudFront, all provisioned with modular Terraform.
 
