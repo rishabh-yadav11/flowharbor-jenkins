@@ -93,11 +93,11 @@ export function ParticleField() {
 
       // Aurora blobs drifting behind the network (2 on mobile).
       const blobCount = isMobile ? 2 : 3
-      const blobs: Array<[number, number, number]> = [
+      const blobs: Array<[number, number, number]> = ([
         [0.25 + 0.12 * Math.sin(t * 0.11), 0.2 + 0.1 * Math.cos(t * 0.09), 320],
         [0.78 + 0.1 * Math.cos(t * 0.13), 0.28 + 0.12 * Math.sin(t * 0.11), 290],
         [0.5 + 0.18 * Math.sin(t * 0.07), 0.85 + 0.08 * Math.cos(t * 0.1), 275],
-      ].slice(0, blobCount)
+      ] as Array<[number, number, number]>).slice(0, blobCount)
       for (const [bx, by, hue] of blobs) {
         const g = ctx.createRadialGradient(bx * w, by * h, 0, bx * w, by * h, Math.max(w, h) * 0.4)
         g.addColorStop(0, `hsla(${hue}, 90%, 60%, 0.10)`)
