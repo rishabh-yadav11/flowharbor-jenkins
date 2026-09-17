@@ -4,9 +4,14 @@
 # Exported IAM resource identifiers for consumption by other modules.
 # =============================================================================
 
-output "jenkins_instance_profile_name" {
-  description = "Name of the Jenkins EC2 instance profile — used when launching Jenkins Master and Slave instances"
-  value       = aws_iam_instance_profile.jenkins.name
+output "jenkins_master_instance_profile_name" {
+  description = "Name of the Jenkins Master EC2 instance profile — used when launching the Jenkins Master instance"
+  value       = aws_iam_instance_profile.jenkins_master.name
+}
+
+output "jenkins_slave_instance_profile_name" {
+  description = "Name of the Jenkins Slave EC2 instance profile — used when launching the Jenkins Slave instance"
+  value       = aws_iam_instance_profile.jenkins_slave.name
 }
 
 output "ecs_execution_role_arn" {
