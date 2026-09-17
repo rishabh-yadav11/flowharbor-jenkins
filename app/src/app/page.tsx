@@ -29,7 +29,7 @@ export default function Home() {
 
       {/* Hero */}
       <div className="relative z-10 flex min-h-dvh flex-col items-center justify-center px-6 text-center">
-        <h1 className="bg-gradient-to-br from-white via-indigo-200 to-indigo-400 bg-clip-text text-6xl font-black tracking-tight text-transparent sm:text-8xl">
+        <h1 className="bg-linear-to-br from-white via-indigo-200 to-indigo-400 bg-clip-text text-6xl font-black tracking-tight text-transparent sm:text-8xl">
           FlowHarbor
         </h1>
         <p className="mt-5 max-w-md text-base text-white/50 sm:text-lg">
