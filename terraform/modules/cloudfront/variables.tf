@@ -36,3 +36,21 @@ variable "origin_verify_value" {
   sensitive   = true
   default     = null
 }
+
+variable "logging_bucket_domain" {
+  description = "S3 bucket domain for CloudFront access logging (issue #13). Empty disables."
+  type        = string
+  default     = ""
+}
+
+variable "logging_prefix" {
+  description = "Prefix for CloudFront logs"
+  type        = string
+  default     = "cf"
+}
+
+variable "web_acl_id" {
+  description = "CLOUDFRONT-scope WAF Web ACL ARN (issue #13). Empty = none."
+  type        = string
+  default     = ""
+}

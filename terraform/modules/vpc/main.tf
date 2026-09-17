@@ -287,3 +287,45 @@ resource "aws_security_group" "vpce" {
     Name = "${var.project_name}-vpce-sg"
   }
 }
+
+# =============================================================================
+# VPC Flow Logs (issue #13) — detective control for L3/L4 lateral movement.
+# =============================================================================
+resource "aws_cloudwatch_log_group" "vpc_flow" {
+  name              = "/vpc/${var.project_name}/flow"
+  retention_in_days = var.flow_log_retention_days
+  kms_key_id        = var.logs_kms_key_arn
+}
+
+resource "aws_iam_role" "flow_log" {
+  name = "${var.project_name}-vpc-flow-log-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "vpc-flow-logs.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "flow_log" {
+  name = "${var.project_name}-vpc-flow-log-policy"
+  role = aws_iam_role.flow_log.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]
+      Resource = "${aws_cloudwatch_log_group.vpc_flow.arn}:*"
+    }]
+  })
+}
+
+resource "aws_flow_log" "this" {
+  vpc_id               = aws_vpc.this.id
+  traffic_type         = "ALL"
+  log_destination_type = "cloud-watch-logs"
+  log_destination      = aws_cloudwatch_log_group.vpc_flow.arn
+  iam_role_arn         = aws_iam_role.flow_log.arn
+}

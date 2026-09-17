@@ -36,10 +36,11 @@ resource "aws_ecs_cluster" "this" {
 # ---- Local Values -----------------------------------------------------------
 # Base container definition shared across all three task definitions.
 # Individual environments merge their specific values on top of this base.
+# NOTE: bootstrap image only — Jenkins promote() replaces it with repo@digest.
 locals {
   container_base = {
     name      = "app" # Container name within the task
-    image     = "${var.ecr_repository_url}:latest"
+    image     = "${var.ecr_repository_url}:${var.initial_image_tag}"
     essential = true # If this container fails, the task stops
     portMappings = [
       {
@@ -84,7 +85,7 @@ resource "aws_ecs_task_definition" "dev" {
   # Merge base config with dev-specific values.
   container_definitions = jsonencode([
     merge(local.container_base, {
-      image = "${var.ecr_repository_url}:latest"
+      image = "${var.ecr_repository_url}:${var.initial_image_tag}"
       logConfiguration = merge(local.container_base.logConfiguration, {
         options = merge(local.container_base.logConfiguration.options, {
           "awslogs-group" = "/ecs/${var.project_name}-dev"
@@ -126,7 +127,7 @@ resource "aws_ecs_task_definition" "staging" {
 
   container_definitions = jsonencode([
     merge(local.container_base, {
-      image = "${var.ecr_repository_url}:latest"
+      image = "${var.ecr_repository_url}:${var.initial_image_tag}"
       logConfiguration = merge(local.container_base.logConfiguration, {
         options = merge(local.container_base.logConfiguration.options, {
           "awslogs-group" = "/ecs/${var.project_name}-staging"
@@ -167,7 +168,7 @@ resource "aws_ecs_task_definition" "prod" {
 
   container_definitions = jsonencode([
     merge(local.container_base, {
-      image = "${var.ecr_repository_url}:latest"
+      image = "${var.ecr_repository_url}:${var.initial_image_tag}"
       logConfiguration = merge(local.container_base.logConfiguration, {
         options = merge(local.container_base.logConfiguration.options, {
           "awslogs-group" = "/ecs/${var.project_name}-prod"
@@ -199,11 +200,23 @@ resource "aws_ecs_task_definition" "prod" {
 
 # ---- Dev Service ------------------------------------------------------------
 resource "aws_ecs_service" "dev" {
-  name            = "${var.project_name}-dev"
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.dev.arn
-  desired_count   = 1 # Single task for the demo
-  launch_type     = "FARGATE"
+  name                              = "${var.project_name}-dev"
+  cluster                           = aws_ecs_cluster.this.id
+  task_definition                   = aws_ecs_task_definition.dev.arn
+  desired_count                     = var.desired_count["dev"]
+  launch_type                       = "FARGATE"
+  enable_execute_command            = var.enable_execute_command
+  enable_ecs_managed_tags           = true
+  propagate_tags                    = "SERVICE"
+  health_check_grace_period_seconds = 60
+
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   network_configuration {
     subnets          = var.private_subnet_ids # Private subnets only
@@ -221,11 +234,23 @@ resource "aws_ecs_service" "dev" {
 
 # ---- Staging Service --------------------------------------------------------
 resource "aws_ecs_service" "staging" {
-  name            = "${var.project_name}-staging"
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.staging.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
+  name                              = "${var.project_name}-staging"
+  cluster                           = aws_ecs_cluster.this.id
+  task_definition                   = aws_ecs_task_definition.staging.arn
+  desired_count                     = var.desired_count["staging"]
+  launch_type                       = "FARGATE"
+  enable_execute_command            = var.enable_execute_command
+  enable_ecs_managed_tags           = true
+  propagate_tags                    = "SERVICE"
+  health_check_grace_period_seconds = 60
+
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   network_configuration {
     subnets          = var.private_subnet_ids
@@ -242,11 +267,23 @@ resource "aws_ecs_service" "staging" {
 
 # ---- Production Service -----------------------------------------------------
 resource "aws_ecs_service" "prod" {
-  name            = "${var.project_name}-prod"
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.prod.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
+  name                              = "${var.project_name}-prod"
+  cluster                           = aws_ecs_cluster.this.id
+  task_definition                   = aws_ecs_task_definition.prod.arn
+  desired_count                     = var.desired_count["prod"]
+  launch_type                       = "FARGATE"
+  enable_execute_command            = var.enable_execute_command
+  enable_ecs_managed_tags           = true
+  propagate_tags                    = "SERVICE"
+  health_check_grace_period_seconds = 60
+
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   network_configuration {
     subnets          = var.private_subnet_ids

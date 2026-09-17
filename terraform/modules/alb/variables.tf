@@ -51,3 +51,21 @@ variable "origin_verify_value" {
   sensitive   = true
   default     = null
 }
+
+variable "access_logs_bucket" {
+  description = "S3 bucket for ALB access logs (issue #13). Empty disables."
+  type        = string
+  default     = ""
+}
+
+variable "access_logs_prefix" {
+  description = "Prefix for ALB access logs in the bucket"
+  type        = string
+  default     = "alb"
+}
+
+variable "idle_timeout" {
+  description = "ALB idle timeout in seconds"
+  type        = number
+  default     = 60
+}
