@@ -38,3 +38,16 @@ variable "jenkins_target_ip" {
   description = "Private IP address of the Jenkins Master EC2 instance for target group attachment"
   type        = string
 }
+
+variable "origin_verify_header" {
+  description = "HTTP header name the prod listener rule requires (must match CloudFront custom_header name)"
+  type        = string
+  default     = "X-Origin-Verify"
+}
+
+variable "origin_verify_value" {
+  description = "Secret header value CloudFront sends for prod traffic. When null/empty the prod rule matches on Host alone (legacy open behavior for enable_cloudfront=false). Set to enforce origin-bypass protection."
+  type        = string
+  sensitive   = true
+  default     = null
+}

@@ -62,3 +62,29 @@ variable "enable_cloudfront" {
   type        = bool
   default     = false
 }
+
+# ---- CloudFront Origin-Bypass Guard (issue #3) -------------------------------
+# Secret value CloudFront sends as X-Origin-Verify and the ALB prod rule
+# requires. Required when enable_cloudfront=true; ignored otherwise.
+# Generate with: openssl rand -hex 32
+# Pass via env (TF_VAR_cloudfront_origin_verify_token) or tfvars — never commit.
+variable "cloudfront_origin_verify_token" {
+  description = "Secret for the CloudFront origin-verify header (issue #3). Required when enable_cloudfront=true."
+  type        = string
+  sensitive   = true
+  default     = null
+
+  validation {
+    condition     = !var.enable_cloudfront || (var.cloudfront_origin_verify_token != null && length(trimspace(coalesce(var.cloudfront_origin_verify_token, ""))) >= 32)
+    error_message = "cloudfront_origin_verify_token must be set to a secret >= 32 chars when enable_cloudfront=true (generate with: openssl rand -hex 32)."
+  }
+}
+
+# ---- ALB Network Restriction (issue #3) --------------------------------------
+# See security-groups module: strict CloudFront-only SG breaks direct hosts
+# on a single-ALB stack. Keep false until prod is split to a dedicated ALB.
+variable "alb_restrict_to_cloudfront" {
+  description = "Restrict ALB 80/443 SG ingress to the CloudFront origin-facing prefix list only (breaks direct jenkins/testing/staging on a single ALB)"
+  type        = bool
+  default     = false
+}

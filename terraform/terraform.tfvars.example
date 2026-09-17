@@ -21,3 +21,14 @@ hosted_zone_id = "Z123456789EXAMPLE"
 # Toggle CloudFront CDN for production. Set to false to route traffic directly
 # to the ALB (useful for debugging or reducing costs during development).
 # enable_cloudfront = false
+
+# Secret for the CloudFront → ALB origin-verify header (issue #3).
+# REQUIRED when enable_cloudfront = true. Generate with `openssl rand -hex 32`
+# and keep out of version control (prefer TF_VAR_cloudfront_origin_verify_token
+# env var over terraform.tfvars for real secrets).
+# cloudfront_origin_verify_token = "REPLACE-ME-openssl-rand-hex-32"
+
+# Strict CloudFront-only ALB SG (issue #3 follow-up). Default false — enabling
+# breaks direct jenkins/testing/staging on the current single-ALB stack.
+# Only set true after splitting prod onto a dedicated ALB.
+# alb_restrict_to_cloudfront = false
