@@ -29,6 +29,17 @@ resource "aws_lb" "this" {
   # NOTE: set this back to false before running `terraform destroy`.
   enable_deletion_protection = true
 
+  # Detective control (issue #13): encrypted access logs, header hygiene.
+  access_logs {
+    bucket  = var.access_logs_bucket
+    prefix  = var.access_logs_prefix
+    enabled = var.access_logs_bucket != ""
+  }
+
+  drop_invalid_header_fields = true
+  idle_timeout               = var.idle_timeout
+  desync_mitigation_mode     = "defensive"
+
   tags = {
     Name = "${var.project_name}-alb"
   }

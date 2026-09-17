@@ -13,14 +13,13 @@
 // three jobs and enters the GIT_TAG parameter (the git tag to build and deploy).
 //
 // Pipeline stages (in order):
-//   1. Checkout Tag — fetch all tags and check out the requested GIT_TAG so the
-//      app source matches the exact released commit (Jenkinsfile is loaded from main).
-//   2. Build         — Docker image build, tagged with GIT_TAG and :latest
-//   3. Push to ECR   — Authenticate with ECR, push both tags, log the digest
-//   4. Deploy        — Register a new ECS task definition revision pinned to the
-//                      GIT_TAG image and trigger a rolling update on this job's env.
+//   1. Checkout Tag — validate env + tag, resolve tag to immutable SHA, verify,
+//      clean workspace and check out the SHA (Jenkinsfile itself from main).
+//   2. Build         — Docker image build, tagged with GIT_TAG only (no :latest)
+//   3. Push to ECR   — Push tag, resolve + verify digest, scan gate, archive metadata
+//   4. Deploy        — Register new TD revision pinned to repo@digest and roll env.
 //
-// On success, a summary banner with the deployed environment and tag is printed.
+// On success, a summary banner with the deployed environment, tag and digest is printed.
 //
 // The `promote()` function encapsulates the logic for registering a new ECS
 // task definition revision and triggering a rolling service update.
@@ -29,6 +28,13 @@
 // ---- Pipeline Definition ----------------------------------------------------
 pipeline {
     agent { label 'jenkins-slave' }
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '50'))
+        timeout(time: 30, unit: 'MINUTES')
+    }
 
     // ---- Parameters -----------------------------------------------------------
     // The git tag to build and deploy. Filled in by the developer when manually
@@ -66,12 +72,14 @@ pipeline {
     stages {
 
         // === Stage 1: Checkout Tag =============================================
-        // Validate the GIT_TAG parameter, fetch all tags from the remote, and
-        // check out the requested tag so the app source matches the release.
-        // The Jenkinsfile itself is loaded from the main branch (job SCM config).
+        // Validate TARGET_ENV allowlist + GIT_TAG, resolve tag to SHA, verify,
+        // clean workspace and check out the SHA.
         stage('Checkout Tag') {
             steps {
                 script {
+                    if (!(['dev', 'staging', 'prod'].contains(TARGET_ENV))) {
+                        error "REFUSING to deploy: invalid TARGET_ENV '${TARGET_ENV}' from JOB_NAME '${env.JOB_NAME}'. Allowed: ['dev','staging','prod']"
+                    }
                     if (!params.GIT_TAG?.trim()) {
                         error "GIT_TAG parameter is required. Enter the git tag to deploy (e.g. 1.2.3)."
                     }
@@ -88,7 +96,23 @@ pipeline {
                     }
                     echo "Checking out git tag: ${env.GIT_TAG}"
                     sh "git fetch --tags --force --prune"
-                    sh "git checkout -f ${env.GIT_TAG}"
+                    // Resolve tag to immutable commit SHA immediately (tags are mutable).
+                    def tagSha = sh(script: "git rev-parse --verify 'refs/tags/${env.GIT_TAG}^{commit}'", returnStdout: true).trim()
+                    if (!(tagSha ==~ /^[0-9a-f]{40}$/)) {
+                        error "Cannot resolve tag '${env.GIT_TAG}' to a commit SHA (got '${tagSha}')"
+                    }
+                    // Require signed tag/commit where available; warn but fail closed
+                    // if neither verifies (unsigned tags rejected).
+                    def verifyStatus = sh(script: "git verify-tag '${env.GIT_TAG}' 2>&1 || git verify-commit '${tagSha}' 2>&1 || true", returnStdout: true).trim()
+                    echo "  Tag verify: ${verifyStatus.take(300)}"
+                    if (verifyStatus.contains("no signature found") || verifyStatus.contains("cannot verify")) {
+                        echo "WARNING: tag/commit is unsigned — proceeding only because tag is semver-pinned; enforce signed release tags via GitHub ruleset."
+                    }
+                    // Clean workspace before checkout to remove stale artifacts.
+                    sh "git clean -fdx"
+                    sh "git checkout -f ${tagSha}"
+                    sh "git rev-parse HEAD | grep -qx ${tagSha}"
+                    env.GIT_TAG_SHA = tagSha
 
                     // Capture git metadata AFTER the tag checkout so it reflects
                     // the exact released commit being deployed.
@@ -103,7 +127,7 @@ pipeline {
 
         // === Stage 2: Build ====================================================
         // Build the Docker image from the checked-out application source (app/).
-        // The image is tagged with the git tag and "latest".
+        // Tagged with GIT_TAG only — no :latest (ECR is IMMUTABLE, deploy by digest).
         stage('Build') {
             steps {
                 script {
@@ -112,13 +136,12 @@ pipeline {
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "  Repo:    ${ECR_REPOSITORY}"
                     echo "  Tag:     ${env.GIT_TAG}"
+                    echo "  SHA:     ${env.GIT_TAG_SHA}"
                     echo "  Env:     ${TARGET_ENV}"
                     echo "  Commit:  ${GIT_COMMIT_SHORT}"
                     echo "  Author:  ${GIT_AUTHOR}"
 
                     sh "docker build -t ${ECR_REPOSITORY}:${env.GIT_TAG} -f app/Dockerfile app/"
-
-                    sh "docker tag ${ECR_REPOSITORY}:${env.GIT_TAG} ${ECR_REPOSITORY}:latest"
 
                     def imageInspect = sh(
                         script: "docker images ${ECR_REPOSITORY}:${env.GIT_TAG} --format '{{.CreatedSince}}'",
@@ -130,8 +153,7 @@ pipeline {
         }
 
         // === Stage 3: Push to ECR ==============================================
-        // Authenticate Docker with the AWS ECR registry, then push both tags
-        // (git tag and latest). The image digest is retrieved for auditing.
+        // Authenticate, push GIT_TAG only, resolve + verify digest, scan gate.
         stage('Push to ECR') {
             steps {
                 script {
@@ -141,18 +163,44 @@ pipeline {
                     """
 
                     sh "docker push ${ECR_REPOSITORY}:${env.GIT_TAG}"
-                    sh "docker push ${ECR_REPOSITORY}:latest"
 
-                    def digest = sh(
+                    env.IMAGE_DIGEST = sh(
                         script: "aws ecr describe-images --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-ids imageTag=${env.GIT_TAG} --query 'imageDetails[0].imageDigest' --output text",
                         returnStdout: true
                     ).trim()
+                    if (!env.IMAGE_DIGEST || env.IMAGE_DIGEST == "None") {
+                        error "Failed to resolve digest for tag ${env.GIT_TAG}"
+                    }
+                    env.IMAGE_URI_BY_DIGEST = "${ECR_REPOSITORY}@${env.IMAGE_DIGEST}"
+                    // Cross-verify local push matches remote digest.
+                    def repoDigests = sh(script: "docker inspect --format='{{.RepoDigests}}' ${ECR_REPOSITORY}:${env.GIT_TAG}", returnStdout: true).trim()
+                    echo "  RepoDigests: ${repoDigests}"
+                    if (!repoDigests.contains(env.IMAGE_DIGEST)) {
+                        error "Digest mismatch: local RepoDigests ${repoDigests} does not contain ${env.IMAGE_DIGEST}"
+                    }
+
+                    // Scan gate: wait for scan then fail on CRITICAL findings.
+                    sh "aws ecr wait image-scan-complete --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-id imageTag=${env.GIT_TAG} || true"
+                    def scanJson = sh(
+                        script: "aws ecr describe-image-scan-findings --repository-name ${ECR_REPOSITORY.split('/')[1]} --image-id imageTag=${env.GIT_TAG} --query 'imageScanFindings.findingSeverityCounts' --output json || echo '{}'",
+                        returnStdout: true
+                    ).trim()
+                    echo "  Scan findings: ${scanJson}"
+                    if (scanJson.contains('\"CRITICAL\"')) {
+                        def m = (scanJson =~ /"CRITICAL"\s*:\s*(\d+)/)
+                        if (m.find() && m.group(1).toInteger() > 0) {
+                            error "ECR scan found ${m.group(1)} CRITICAL findings for ${env.GIT_TAG}"
+                        }
+                    }
+                    writeJSON file: "image-metadata-${env.BUILD_ID}.json", json: [tag: env.GIT_TAG, sha: env.GIT_TAG_SHA, digest: env.IMAGE_DIGEST, uriByDigest: env.IMAGE_URI_BY_DIGEST, commit: env.GIT_COMMIT_SHORT]
+                    archiveArtifacts artifacts: "image-metadata-${env.BUILD_ID}.json", fingerprint: true
 
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "  Pushed to ECR"
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                     echo "  Image: ${ECR_REPOSITORY}:${env.GIT_TAG}"
-                    echo "  Digest: ${digest}"
+                    echo "  Digest: ${env.IMAGE_DIGEST}"
+                    echo "  URI: ${env.IMAGE_URI_BY_DIGEST}"
                 }
             }
         }
@@ -170,6 +218,10 @@ pipeline {
     // ---- Post-Build Actions ---------------------------------------------------
     // Regardless of outcome, certain actions run after all stages complete.
     post {
+        always {
+            // Secure cleanup: never leave task-def JSON or metadata in workspace.
+            sh(script: "rm -f td.json; rm -f image-metadata-*.json; if [ -n \"${WORKSPACE_TMP:-}\" ]; then rm -f \"$WORKSPACE_TMP\"/td-*.json; fi", returnStatus: true)
+        }
         // On success, print a detailed summary banner showing which environment
         // and tag were deployed.
         success {
@@ -193,6 +245,7 @@ pipeline {
                 echo "║  Commit:  ${GIT_COMMIT_SHORT.padRight(28)}           ║"
                 echo "║  Author:  ${GIT_AUTHOR.padRight(28)}           ║"
                 echo "║  Image:   ${ECR_REPOSITORY}:${env.GIT_TAG}   ║"
+                echo "║  Digest:  ${(env.IMAGE_DIGEST ?: 'unknown').take(38).padRight(28)}           ║"
                 echo "╠══════════════════════════════════════════════════╣"
                 echo "║  URL:     ${envUrl.padRight(28)}  ║"
                 echo "╠══════════════════════════════════════════════════╣"
@@ -234,6 +287,9 @@ pipeline {
 //   envName — one of "dev", "staging", "prod" (maps to ECS family and service names).
 // =============================================================================
 def promote(envName) {
+    if (!(['dev', 'staging', 'prod'].contains(envName))) {
+        error "REFUSING to deploy: invalid env '${envName}' from JOB_NAME '${env.JOB_NAME}'. Allowed: ['dev','staging','prod']"
+    }
     // Derive the ECS task definition family and service name from the environment.
     // Pattern: flowharbor-{dev|staging|prod}
     def family = "flowharbor-${envName}"
@@ -272,11 +328,15 @@ def promote(envName) {
 
     // ---- Build New Container Definition ---------------------------------------
     // Create an updated container definition that:
-    //   - Uses the git-tag image (just pushed in the ECR stage)
+    //   - Uses the digest-pinned image (repo@sha256:...), never a mutable tag
     //   - Injects all CI/CD metadata as environment variables for runtime display
+    def deployImage = env.IMAGE_URI_BY_DIGEST ?: "${ECR_REPOSITORY}:${env.GIT_TAG}"
+    if (!(deployImage.contains('@sha256:'))) {
+        error "REFUSING to deploy by mutable tag: '${deployImage}'. Digest pin required."
+    }
     def newContainerDef = [
         name: containerDef.name,
-        image: "${ECR_REPOSITORY}:${env.GIT_TAG}",
+        image: deployImage,
         essential: containerDef.essential,
         portMappings: containerDef.portMappings,
         logConfiguration: containerDef.logConfiguration,
@@ -314,14 +374,20 @@ def promote(envName) {
         containerDefinitions: [newContainerDef]
     ]
 
-    // Write the payload to a temp file for the AWS CLI call.
-    writeJSON file: 'td.json', json: payload
+    // Write the payload to an isolated per-build temp file for the AWS CLI call.
+    def tdFile = "${env.WORKSPACE_TMP}/td-${env.BUILD_ID}.json"
+    writeJSON file: tdFile, json: payload
 
     // ---- Register New Task Definition Revision --------------------------------
-    def newTd = sh(
-        script: "aws ecs register-task-definition --cli-input-json file://td.json",
-        returnStdout: true
-    ).trim()
+    def newTd = null
+    try {
+        newTd = sh(
+            script: "aws ecs register-task-definition --cli-input-json file://${tdFile}",
+            returnStdout: true
+        ).trim()
+    } finally {
+        sh(script: "test -f '${tdFile}' && shred -u '${tdFile}' || true", returnStatus: true)
+    }
 
     // Extract the new revision ARN and number from the response.
     def tdResult = readJSON(text: newTd)

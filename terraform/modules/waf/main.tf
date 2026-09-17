@@ -102,6 +102,29 @@ resource "aws_wafv2_web_acl" "this" {
     }
   }
 
+  # -- Priority 5: Global L7 flood guard (issue #13) -----------------------------
+  rule {
+    name     = "global-rate-limit"
+    priority = 5
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 2000
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.project_name}-global-rate-limit"
+      sampled_requests_enabled   = true
+    }
+  }
+
   # -- Priority 10: Jenkins /login brute-force rate limit -----------------------
   rule {
     name     = "jenkins-login-rate-limit"

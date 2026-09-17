@@ -35,10 +35,10 @@ resource "aws_security_group" "alb" {
   # (no plaintext content is ever served). In strict CloudFront-only mode
   # this is scoped to the CloudFront origin-facing prefix list.
   ingress {
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    cidr_blocks     = var.alb_restrict_to_cloudfront ? null : ["0.0.0.0/0"]
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = var.alb_restrict_to_cloudfront ? null : ["0.0.0.0/0"]
     prefix_list_ids = var.alb_restrict_to_cloudfront ? [
       data.aws_ec2_managed_prefix_list.cloudfront_origin.id
     ] : null
@@ -47,10 +47,10 @@ resource "aws_security_group" "alb" {
   # Allow HTTPS traffic (TLS termination at ALB). Open by default for direct
   # hosts; set alb_restrict_to_cloudfront=true to scope to CloudFront only.
   ingress {
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    cidr_blocks     = var.alb_restrict_to_cloudfront ? null : ["0.0.0.0/0"]
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = var.alb_restrict_to_cloudfront ? null : ["0.0.0.0/0"]
     prefix_list_ids = var.alb_restrict_to_cloudfront ? [
       data.aws_ec2_managed_prefix_list.cloudfront_origin.id
     ] : null

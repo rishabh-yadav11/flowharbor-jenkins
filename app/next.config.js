@@ -28,6 +28,7 @@ const securityHeaders = [
       "base-uri 'self'",
       "form-action 'self'",
       "frame-ancestors 'none'",
+      "navigate-to 'self' http: https:",
     ].join("; "),
   },
 ]

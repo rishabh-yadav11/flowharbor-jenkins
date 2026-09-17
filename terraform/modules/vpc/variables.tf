@@ -23,3 +23,15 @@ variable "project_name" {
   description = "Project name used as a prefix for tagging all VPC resources"
   type        = string
 }
+
+variable "flow_log_retention_days" {
+  description = "CloudWatch retention for VPC flow logs"
+  type        = number
+  default     = 90
+}
+
+variable "logs_kms_key_arn" {
+  description = "KMS CMK ARN for flow-log CloudWatch encryption (optional)"
+  type        = string
+  default     = null
+}

@@ -230,6 +230,7 @@ resource "aws_iam_role_policy" "jenkins_slave_ecr" {
           "ecr:BatchGetImage",
           "ecr:CompleteLayerUpload",
           "ecr:DescribeImages",
+          "ecr:DescribeImageScanFindings",
           "ecr:DescribeRepositories",
           "ecr:GetDownloadUrlForLayer",
           "ecr:InitiateLayerUpload",
@@ -262,7 +263,11 @@ resource "aws_iam_role_policy" "jenkins_slave_ecs" {
           "ecs:RegisterTaskDefinition",
           "ecs:DescribeTaskDefinition"
         ]
-        Resource = "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-*"
+        Resource = [
+          "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-dev",
+          "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-staging",
+          "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-prod"
+        ]
       },
       {
         Effect = "Allow"
@@ -270,7 +275,11 @@ resource "aws_iam_role_policy" "jenkins_slave_ecs" {
           "ecs:UpdateService",
           "ecs:DescribeServices"
         ]
-        Resource = "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:service/${var.project_name}-cluster/${var.project_name}-*"
+        Resource = [
+          "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:service/${var.project_name}-cluster/${var.project_name}-dev",
+          "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:service/${var.project_name}-cluster/${var.project_name}-staging",
+          "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:service/${var.project_name}-cluster/${var.project_name}-prod"
+        ]
       },
       {
         Effect = "Allow"

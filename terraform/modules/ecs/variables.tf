@@ -48,3 +48,45 @@ variable "alb_prod_tg_arn" {
   description = "ARN of the ALB prod target group for service registration"
   type        = string
 }
+
+variable "initial_image_tag" {
+  description = "Bootstrap image tag for initial task definitions only. Runtime image is managed by Jenkins promote() via digest (repo@sha256:...). Never use :latest."
+  type        = string
+  default     = "0.0.0-bootstrap"
+}
+
+variable "desired_count" {
+  description = "Desired task count per environment"
+  type        = map(number)
+  default = {
+    dev     = 1
+    staging = 2
+    prod    = 2
+  }
+}
+
+variable "min_capacity" {
+  description = "Min autoscaling capacity per environment"
+  type        = map(number)
+  default = {
+    dev     = 1
+    staging = 2
+    prod    = 2
+  }
+}
+
+variable "max_capacity" {
+  description = "Max autoscaling capacity per environment"
+  type        = map(number)
+  default = {
+    dev     = 2
+    staging = 4
+    prod    = 6
+  }
+}
+
+variable "enable_execute_command" {
+  description = "Enable ECS exec. True requires KMS logging config; false disables for least privilege."
+  type        = bool
+  default     = false
+}

@@ -71,6 +71,17 @@ resource "aws_cloudfront_distribution" "this" {
   comment             = "FlowHarbor production distribution"
   default_root_object = "index.html"
   price_class         = "PriceClass_100" # Only North America and Europe (cheapest)
+  web_acl_id          = var.web_acl_id != "" ? var.web_acl_id : null
+  http_version        = "http2and3"
+
+  dynamic "logging_config" {
+    for_each = var.logging_bucket_domain != "" ? [1] : []
+    content {
+      bucket          = var.logging_bucket_domain
+      prefix          = var.logging_prefix
+      include_cookies = false
+    }
+  }
 
   # The production domain (flowharbor.in) is an alias for the distribution.
   aliases = [var.domain_name]

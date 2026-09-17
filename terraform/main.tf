@@ -57,16 +57,32 @@ locals {
 }
 
 # =============================================================================
+# Module: Observability-Logging (issue #13)
+# =============================================================================
+# Central encrypted S3 log bucket + KMS CMK for ALB/CF/VPC flow logs.
+module "observability_logging" {
+  source       = "./modules/observability-logging"
+  project_name = var.project_name
+}
+
+# GuardDuty detector (issue #13) — threat intel for EC2/ECS/IAM/S3/DNS.
+resource "aws_guardduty_detector" "this" {
+  enable                       = true
+  finding_publishing_frequency = "FIFTEEN_MINUTES"
+}
+
+# =============================================================================
 # Module: VPC
 # =============================================================================
 # Creates the foundation networking layer: VPC, subnets, routing, NAT, and
 # VPC endpoints for private subnet connectivity to AWS services.
 module "vpc" {
-  source       = "./modules/vpc"
-  aws_region   = var.aws_region
-  azs          = local.azs
-  vpc_cidr     = var.vpc_cidr
-  project_name = var.project_name
+  source           = "./modules/vpc"
+  aws_region       = var.aws_region
+  azs              = local.azs
+  vpc_cidr         = var.vpc_cidr
+  project_name     = var.project_name
+  logs_kms_key_arn = module.observability_logging.logs_kms_key_arn
 }
 
 # =============================================================================
@@ -178,7 +194,9 @@ module "alb" {
   domain_name         = var.domain_name
   jenkins_target_ip   = module.jenkins_master.private_ip
   origin_verify_value = var.enable_cloudfront ? var.cloudfront_origin_verify_token : null
-  depends_on          = [module.jenkins_master, module.acm]
+  access_logs_bucket  = module.observability_logging.bucket_id
+  access_logs_prefix  = "${var.project_name}-alb"
+  depends_on          = [module.jenkins_master, module.acm, module.observability_logging]
 }
 
 # =============================================================================
@@ -225,14 +243,16 @@ module "ecs" {
 # at the edge. Only the root domain (flowharbor.in) goes through CloudFront;
 # testing and staging subdomains go directly to the ALB.
 module "cloudfront" {
-  count               = var.enable_cloudfront ? 1 : 0
-  source              = "./modules/cloudfront"
-  domain_name         = var.domain_name
-  alb_domain_name     = "origin.${var.domain_name}"
-  certificate_arn     = module.acm.cloudfront_certificate_arn
-  project_name        = var.project_name
-  origin_verify_value = var.cloudfront_origin_verify_token
-  depends_on          = [module.alb, module.acm]
+  count                 = var.enable_cloudfront ? 1 : 0
+  source                = "./modules/cloudfront"
+  domain_name           = var.domain_name
+  alb_domain_name       = "origin.${var.domain_name}"
+  certificate_arn       = module.acm.cloudfront_certificate_arn
+  project_name          = var.project_name
+  origin_verify_value   = var.cloudfront_origin_verify_token
+  logging_bucket_domain = module.observability_logging.bucket_domain_name
+  logging_prefix        = "${var.project_name}-cf"
+  depends_on            = [module.alb, module.acm, module.observability_logging]
 }
 
 # =============================================================================
