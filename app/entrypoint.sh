@@ -1,5 +1,7 @@
 #!/bin/sh
-set -e
+set -eu
+: "${PORT:=3000}"
+export PORT
 
 # Issue #15: the container runs with readonlyRootFilesystem=true. Writable
 # paths are provided via task-def mounts: /tmp (scratch) and /app/public
@@ -26,18 +28,20 @@ function safeUrl(v, fb) {
     return (p === "http:" || p === "https:") ? u.toString().slice(0, 2048) : fb;
   } catch (e) { return fb; }
 }
-function cap(v, n, fb) { v = String(v != null ? v : fb).slice(0, n); return v || fb; }
+function cap(v, n, fb) { v = (typeof v === "string" ? v : fb).slice(0, n); return v || fb; }
+function serialize(v) { return JSON.stringify(v).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029"); }
 const cfg = {
-  ENV: cap(process.env.ENV, 128, "dev"),
+  ENV: (function (v) { return (v === "dev" || v === "staging" || v === "prod") ? v : "dev"; })(cap(process.env.ENV, 128, "dev")),
   VERSION: cap(process.env.VERSION, 128, "1.0.0"),
   BUILD_NUMBER: cap(process.env.BUILD_NUMBER, 128, "0"),
   GIT_COMMIT: cap(process.env.GIT_COMMIT, 128, "unknown"),
   GIT_BRANCH: cap(process.env.GIT_BRANCH, 128, "unknown"),
-  GIT_AUTHOR: cap(process.env.GIT_AUTHOR, 256, "unknown"),
+  GIT_AUTHOR: String(process.env.GIT_AUTHOR || "unknown").replace(/[\r\n]+/g, " ").slice(0, 256).trim() || "unknown",
   TIMESTAMP: cap(process.env.TIMESTAMP, 128, "unknown"),
   PIPELINE_URL: safeUrl(process.env.PIPELINE_URL, "#"),
 };
-const js = "window.__RUNTIME_CONFIG__ = " + JSON.stringify(cfg) + ";";
+const js = "window.__RUNTIME_CONFIG__=Object.freeze(" + serialize(cfg) + ");";
+if (js.length > 8192) { console.error("runtime-config oversize"); process.exit(1); }
 fs.writeFileSync("public/runtime-config.js", js);
 // Versioned copy (issue #19): CloudFront never caches /runtime-config*
 // (CachingDisabled), but a versioned filename additionally busts any

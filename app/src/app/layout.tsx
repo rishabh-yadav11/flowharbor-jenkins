@@ -13,6 +13,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <head>
+        {/* WARNING (issue #20): keep runtime-config as external src. Never inline
+            its contents without serializeRuntimeConfig() escaping (<, >, U+2028/29),
+            or a hostile VERSION/GIT_BRANCH could break out of </script>. */}
         <script src="/runtime-config.js" defer />
       </head>
       <body className={inter.className}>{children}</body>
