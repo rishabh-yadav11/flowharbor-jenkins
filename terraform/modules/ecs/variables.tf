@@ -90,3 +90,15 @@ variable "enable_execute_command" {
   type        = bool
   default     = false
 }
+
+variable "ssm_parameter_prefix" {
+  description = "SSM Parameter Store prefix for per-env container secrets (e.g. /flowharbor/dev/GIT_AUTHOR). Jenkins promote() writes values; Terraform owns the skeleton."
+  type        = string
+  default     = "/flowharbor"
+}
+
+variable "log_kms_key_id" {
+  description = "KMS key ARN for CloudWatch log group encryption (wired from observability_logging module). Null disables encryption."
+  type        = string
+  default     = null
+}

@@ -80,6 +80,15 @@ variable "cloudfront_origin_verify_token" {
   }
 }
 
+# ---- DNSSEC Toggle (issue #19) ---------------------------------------------------
+# Opt-in Route53 DNSSEC signing. Default off — enabling requires a us-east-1
+# KMS key and hosted-zone signing.
+variable "enable_dnssec" {
+  description = "Enable Route53 DNSSEC signing (issue #19). Default false."
+  type        = bool
+  default     = false
+}
+
 # ---- ALB Network Restriction (issue #3) --------------------------------------
 # See security-groups module: strict CloudFront-only SG breaks direct hosts
 # on a single-ALB stack. Keep false until prod is split to a dedicated ALB.

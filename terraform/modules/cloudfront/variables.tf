@@ -10,7 +10,7 @@ variable "domain_name" {
 }
 
 variable "alb_domain_name" {
-  description = "ALB DNS name — the origin that CloudFront forwards requests to"
+  description = "Cert-matched origin hostname (origin.<domain> alias → ALB) that CloudFront forwards requests to over HTTPS. Must be covered by the ALB's ACM cert — do not pass the raw ALB DNS name (TLS verification would fail)."
   type        = string
 }
 

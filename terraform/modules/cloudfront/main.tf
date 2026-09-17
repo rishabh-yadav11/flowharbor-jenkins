@@ -64,6 +64,33 @@ resource "aws_cloudfront_cache_policy" "alb" {
   }
 }
 
+# ---- Response Headers Policy (issue #19) ---------------------------------------
+# HSTS max-age 2 years + preload so browsers always use HTTPS.
+resource "aws_cloudfront_response_headers_policy" "security" {
+  name    = "${var.project_name}-security-headers"
+  comment = "HSTS 2yr preload + common hardening headers"
+
+  security_headers_config {
+    strict_transport_security {
+      access_control_max_age_sec = 63072000
+      include_subdomains         = true
+      preload                    = true
+      override                   = true
+    }
+    content_type_options {
+      override = true
+    }
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = true
+    }
+  }
+}
+
 # ---- CloudFront Distribution ------------------------------------------------
 resource "aws_cloudfront_distribution" "this" {
   enabled             = true
@@ -102,7 +129,7 @@ resource "aws_cloudfront_distribution" "this" {
       http_port              = 80
       https_port             = 443
       origin_protocol_policy = "https-only" # CloudFront → ALB over TLS
-      origin_ssl_protocols   = ["TLSv1.2"]
+      origin_ssl_protocols   = ["TLSv1.2", "TLSv1.3"]
     }
 
     # Secret header the ALB validates on the prod listener rule. This is the
@@ -118,15 +145,48 @@ resource "aws_cloudfront_distribution" "this" {
 
   # ---- Default Cache Behavior -----------------------------------------------
   # Controls how CloudFront caches and forwards requests to the origin.
+  # Restricted to safe read methods (issue #19) — no writes at the edge.
   default_cache_behavior {
     target_origin_id       = "alb-origin"
     viewer_protocol_policy = "redirect-to-https" # HTTP → HTTPS redirect
-    allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
     cached_methods         = ["GET", "HEAD"] # Only cache read requests
     compress               = true            # Gzip/brotli compression
 
-    cache_policy_id          = aws_cloudfront_cache_policy.alb.id
-    origin_request_policy_id = aws_cloudfront_origin_request_policy.alb.id
+    cache_policy_id            = aws_cloudfront_cache_policy.alb.id
+    origin_request_policy_id   = aws_cloudfront_origin_request_policy.alb.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
+  }
+
+  # ---- Ordered Cache Behaviors (issue #19) ----------------------------------
+  # runtime-config must never be cached (per-deploy values). CachingDisabled
+  # is the AWS managed policy 4135ea2d-6df8-44a3-9df3-4b5a84be39ad.
+  # Backward compat: /runtime-config.js stays the canonical path; the
+  # versioned /runtime-config.*.js variant (written by entrypoint.sh) is
+  # covered by the wildcard pattern too.
+  ordered_cache_behavior {
+    path_pattern               = "/runtime-config*"
+    target_origin_id           = "alb-origin"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    cached_methods             = ["GET", "HEAD"]
+    compress                   = true
+    cache_policy_id            = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # Managed-CachingDisabled
+    origin_request_policy_id   = aws_cloudfront_origin_request_policy.alb.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
+  }
+
+  # API traffic is dynamic — never cache.
+  ordered_cache_behavior {
+    path_pattern               = "/api/*"
+    target_origin_id           = "alb-origin"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    cached_methods             = ["GET", "HEAD"]
+    compress                   = true
+    cache_policy_id            = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # Managed-CachingDisabled
+    origin_request_policy_id   = aws_cloudfront_origin_request_policy.alb.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
   }
 
   # ---- Viewer Certificate ---------------------------------------------------
@@ -134,7 +194,7 @@ resource "aws_cloudfront_distribution" "this" {
   viewer_certificate {
     acm_certificate_arn      = var.certificate_arn
     ssl_support_method       = "sni-only"     # SNI for multiple domains on one IP
-    minimum_protocol_version = "TLSv1.2_2021" # Modern TLS minimum
+    minimum_protocol_version = "TLSv1.3_2025" # Prefer TLS 1.3 where supported, floor TLS 1.2
   }
 
   # ---- Geo Restrictions -----------------------------------------------------

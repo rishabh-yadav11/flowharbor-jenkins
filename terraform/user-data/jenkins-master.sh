@@ -126,7 +126,20 @@ java -jar /usr/share/jenkins/jenkins-plugin-manager.jar \
     github \
     pipeline-utility-steps \
     dark-theme \
-    job-dsl
+    job-dsl \
+    role-strategy \
+    throttle-concurrents
+
+# NOTE (issue #16 — approval gate + deploy-churn DoS):
+#   - role-strategy: provides Role-Based Authorization Strategy. After bootstrap,
+#     create a 'release-managers' role (via JCasC or Groovy in script console) and
+#     assign prod approvers to it. The Jenkinsfile prod Approval stage uses
+#     `input submitter: 'release-managers,admin'`, so only those roles can approve.
+#     Example Groovy (run manually, not in bootstrap to avoid breaking setup):
+#       // import com.michelin.cio.hudson.plugins.rolestrategy.*; ...
+#   - throttle-concurrents: backs the declarative `rateLimitBuilds` / throttle
+#     option in the Jenkinsfile (max 3 builds/hour) plus disableConcurrentBuilds,
+#     preventing deploy-churn DoS from rapid repeated manual triggers.
 
 # Fix ownership of the downloaded plugins.
 chown -R jenkins:jenkins /var/lib/jenkins/plugins
@@ -278,6 +291,14 @@ curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
   -X POST 'http://localhost:8080/scriptText' \
   --data-urlencode 'script=import jenkins.model.*;import com.cloudbees.plugins.credentials.*;import com.cloudbees.plugins.credentials.domains.*;import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;import hudson.util.Secret;def i=Jenkins.getInstance();def s=Domain.global();def p=CredentialsProvider.lookupStores(i).iterator().next();def id="ecr-repository-url";def ex=CredentialsProvider.lookupCredentials(StringCredentialsImpl.class,i).find({it.id==id});if(ex){p.removeCredentials(s,ex)};def c=new StringCredentialsImpl(CredentialsScope.GLOBAL,id,"ECR Repository URL",Secret.fromString("${ecr_repository_url}"));p.addCredentials(s,c);i.save();println("ECR_CRED_ADDED")' \
   --max-time 10
+
+# ---- RBAC / Approval Gate Notes (issue #16, comments only) --------------------
+# The prod Approval stage (`input submitter: 'release-managers,admin'`) requires
+# the role-strategy plugin (installed above). To activate post-bootstrap, an admin
+# can run a Groovy snippet via script console / JCasC to define roles, e.g.:
+#   // RoleBasedAuthorizationStrategy: 'release-managers' -> Job/Build, Input/Proceed
+#   // on flowharbor-prod; 'developers' -> Build on flowharbor-dev/staging only.
+# Left as documentation here so first-boot bootstrap stays unchanged and safe.
 
 # ---- Signal Master Ready ----------------------------------------------------
 # Tell the Jenkins Slave that the master has finished bootstrapping and that

@@ -6,7 +6,7 @@
 # allowing only the minimum required traffic.
 #
 # Security groups created:
-#   1. alb_sg          — ALB (internet-facing): 443 in, all out
+#   1. alb_sg          — ALB (internet-facing): 443 in, tcp-only out (8080 master, 3000 ECS)
 #   2. jenkins_master   — Jenkins controller: 8080 (ALB+slave), 50000 (slave)
 #   3. jenkins_slave    — Jenkins agent: outbound-only
 #   4. ecs_tasks        — Fargate containers: 3000 (ALB only)
@@ -56,17 +56,36 @@ resource "aws_security_group" "alb" {
     ] : null
   }
 
-  # Allow all outbound traffic to reach target groups and AWS services.
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  # Scoped egress: TCP only to Jenkins master (8080) and ECS tasks (3000).
+  # Implemented as standalone aws_security_group_rule resources below (avoids
+  # the SG<->SG inline cycle: master/ecs ingress already references the ALB).
+  # No inline egress here — deny-all by default except the explicit rules.
 
   tags = {
     Name = "${var.project_name}-alb-sg"
   }
+}
+
+# ALB -> Jenkins master (8080, web UI/JNLP handshake).
+resource "aws_security_group_rule" "alb_egress_master" {
+  type                     = "egress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.alb.id
+  source_security_group_id = aws_security_group.jenkins_master.id
+  description              = "ALB to Jenkins master web UI"
+}
+
+# ALB -> ECS tasks (3000, Next.js containers).
+resource "aws_security_group_rule" "alb_egress_ecs" {
+  type                     = "egress"
+  from_port                = 3000
+  to_port                  = 3000
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.alb.id
+  source_security_group_id = aws_security_group.ecs_tasks.id
+  description              = "ALB to ECS tasks"
 }
 
 # ---- Jenkins Master Security Group ------------------------------------------
@@ -103,17 +122,48 @@ resource "aws_security_group" "jenkins_master" {
     security_groups = [aws_security_group.jenkins_slave.id]
   }
 
-  # Unrestricted egress for package downloads, AWS API calls, etc.
+  # Scoped egress: HTTP/HTTPS for packages/AWS APIs, plus JNLP callback to
+  # the slave (standalone rules below to avoid an inline SG<->SG cycle).
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP package downloads"
+  }
+
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS AWS APIs and package downloads"
   }
 
   tags = {
     Name = "${var.project_name}-jenkins-master-sg"
   }
+}
+
+# Master -> slave callbacks (JNLP/agent communication).
+resource "aws_security_group_rule" "master_egress_slave_8080" {
+  type                     = "egress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.jenkins_master.id
+  source_security_group_id = aws_security_group.jenkins_slave.id
+  description              = "Master to slave agent communication"
+}
+
+resource "aws_security_group_rule" "master_egress_slave_50000" {
+  type                     = "egress"
+  from_port                = 50000
+  to_port                  = 50000
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.jenkins_master.id
+  source_security_group_id = aws_security_group.jenkins_slave.id
+  description              = "Master to slave JNLP"
 }
 
 # ---- Jenkins Slave Security Group -------------------------------------------
@@ -127,17 +177,48 @@ resource "aws_security_group" "jenkins_slave" {
   # No ingress rules — the slave is outbound-only. It connects to the master
   # by initiating outbound JNLP connections.
 
-  # Full outbound access for Docker pulls, apt, AWS APIs, etc.
+  # Scoped egress: HTTP/HTTPS for Docker pulls, apt, AWS APIs, plus JNLP to
+  # the master (standalone rules below to avoid an inline SG<->SG cycle).
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP package and Docker downloads"
+  }
+
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS ECR, AWS APIs and package downloads"
   }
 
   tags = {
     Name = "${var.project_name}-jenkins-slave-sg"
   }
+}
+
+# Slave -> master JNLP (agent registration and web UI polling).
+resource "aws_security_group_rule" "slave_egress_master_8080" {
+  type                     = "egress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.jenkins_slave.id
+  source_security_group_id = aws_security_group.jenkins_master.id
+  description              = "Slave to master agent communication"
+}
+
+resource "aws_security_group_rule" "slave_egress_master_50000" {
+  type                     = "egress"
+  from_port                = 50000
+  to_port                  = 50000
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.jenkins_slave.id
+  source_security_group_id = aws_security_group.jenkins_master.id
+  description              = "Slave to master JNLP"
 }
 
 # ---- ECS Tasks Security Group -----------------------------------------------
@@ -156,12 +237,13 @@ resource "aws_security_group" "ecs_tasks" {
     security_groups = [aws_security_group.alb.id]
   }
 
-  # Outbound access for logs, pulling images, etc.
+  # Scoped egress: HTTPS only (ECR via endpoints, CloudWatch Logs).
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS to ECR endpoints and CloudWatch Logs"
   }
 
   tags = {

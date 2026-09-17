@@ -33,7 +33,8 @@ pipeline {
         disableConcurrentBuilds()
         timestamps()
         buildDiscarder(logRotator(numToKeepStr: '50'))
-        timeout(time: 30, unit: 'MINUTES')
+        timeout(time: 20, unit: 'MINUTES')
+        rateLimitBuilds(throttle: [count: 3, durationName: 'hour', userBoost: false])
     }
 
     // ---- Parameters -----------------------------------------------------------
@@ -141,6 +142,10 @@ pipeline {
                     echo "  Commit:  ${GIT_COMMIT_SHORT}"
                     echo "  Author:  ${GIT_AUTHOR}"
 
+                    dir('app') {
+                        sh "npm ci --ignore-scripts && npm audit --audit-level=high"
+                    }
+
                     sh "docker build -t ${ECR_REPOSITORY}:${env.GIT_TAG} -f app/Dockerfile app/"
 
                     def imageInspect = sh(
@@ -205,9 +210,24 @@ pipeline {
             }
         }
 
+        // === Stage 3.5: Approval (prod only) =====================================
+        // Manual approval gate for production. Only members of
+        // release-managers/admin may approve. Requires the role-strategy
+        // plugin (see jenkins-master.sh). Non-prod jobs skip via when.
+        stage('Approval') {
+            when { expression { return env.TARGET_ENV == 'prod' } }
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: "Approve PROD deploy of tag ${env.GIT_TAG}?",
+                          ok: 'Deploy to prod',
+                          submitter: 'release-managers,admin'
+                }
+            }
+        }
+
         // === Stage 4: Deploy ===================================================
         // Deploy the tagged image directly to this job's target environment.
-        // No promotion chain and no manual approval gates.
+        // Prod requires Approval stage + staging promotion-chain check (see promote()).
         stage('Deploy') {
             steps {
                 script { promote(TARGET_ENV) }
@@ -334,25 +354,89 @@ def promote(envName) {
     if (!(deployImage.contains('@sha256:'))) {
         error "REFUSING to deploy by mutable tag: '${deployImage}'. Digest pin required."
     }
-    def newContainerDef = [
-        name: containerDef.name,
-        image: deployImage,
-        essential: containerDef.essential,
-        portMappings: containerDef.portMappings,
-        logConfiguration: containerDef.logConfiguration,
-        // Environment variables are consumed by the app's entrypoint.sh to
-        // render the build info on the web page at runtime.
-        environment: [
-            [name: "ENV", value: envName],
-            [name: "VERSION", value: env.GIT_TAG],
-            [name: "BUILD_NUMBER", value: "${BUILD_NUMBER}"],
-            [name: "GIT_COMMIT", value: GIT_COMMIT_SHORT],
-            [name: "GIT_BRANCH", value: GIT_BRANCH],
-            [name: "GIT_AUTHOR", value: GIT_AUTHOR],
-            [name: "TIMESTAMP", value: TIMESTAMP],
-            [name: "PIPELINE_URL", value: PIPELINE_URL]
-        ]
+
+    // ---- Promotion-chain check (prod only) ------------------------------------
+    // Prod may only deploy an image already validated in staging. Compare the
+    // staging task definition image against the image under deployment; fail closed.
+    if (envName == 'prod') {
+        def stagingDesc = sh(
+            script: "aws ecs describe-task-definition --task-definition flowharbor-staging",
+            returnStdout: true
+        ).trim()
+        def stagingTd = readJSON text: stagingDesc
+        def stagingImage = stagingTd.taskDefinition.containerDefinitions[0].image
+        if (stagingImage != deployImage) {
+            error "Promotion chain violated: prod image ${deployImage} != staging image ${stagingImage}. Deploy to staging first."
+        }
+        echo "  Promotion chain OK: matches staging"
+    }
+
+    // ---- No-op / churn guard --------------------------------------------------
+    // If the target env already runs this exact image+env, skip the update to
+    // avoid deploy churn / DoS via repeated identical deployments.
+    def imageChanged = (containerDef.image != deployImage)
+    if (!imageChanged) {
+        echo "No-op: image ${deployImage} already deployed to ${envName}; skipping update."
+        return
+    }
+    // ---- Mutate-in-place + secrets publish (issue #15) --------------------------
+    // Mutate the CURRENT container definition: only swap image + non-secret
+    // env values. This preserves Terraform-owned hardening (user,
+    // readonlyRootFilesystem, privileged, linuxParameters, healthCheck,
+    // mountPoints, secrets). The previous allowlist rebuild dropped all of
+    // these on every deploy.
+    // GIT_AUTHOR/PIPELINE_URL are delivered via the `secrets` block (SSM
+    // SecureString), never plaintext `environment`. Values are published
+    // first so the new revision resolves them at launch. Requires the slave
+    // ssm:PutParameter grant on /flowharbor/{dev,staging,prod}/* (iam module).
+    // NOTE: \$ escapes Groovy interpolation so the SHELL expands these from
+    // the Jenkins environment (avoids quote-injection via author names).
+    sh """
+        aws ssm put-parameter --name '/flowharbor/${envName}/GIT_AUTHOR' \
+            --value "\$GIT_AUTHOR" --type SecureString --overwrite --tier Standard >/dev/null
+        aws ssm put-parameter --name '/flowharbor/${envName}/PIPELINE_URL' \
+            --value "\$PIPELINE_URL" --type SecureString --overwrite --tier Standard >/dev/null
+    """
+    def newEnvValues = [
+        "ENV"         : envName,
+        "VERSION"     : env.GIT_TAG,
+        "BUILD_NUMBER": "${BUILD_NUMBER}",
+        "GIT_COMMIT"  : GIT_COMMIT_SHORT,
+        "GIT_BRANCH"  : GIT_BRANCH,
+        "TIMESTAMP"   : TIMESTAMP
     ]
+    def secretNames = ["GIT_AUTHOR", "PIPELINE_URL"] as Set
+    // Update existing entries, drop leaked secret-names from environment, add
+    // missing plaintext keys. Unknown pre-existing keys are preserved as-is.
+    def mergedEnv = []
+    def seen = [] as Set
+    (containerDef.environment ?: []).each { e ->
+        if (secretNames.contains(e.name)) {
+            return // Must come from `secrets`, never `environment`.
+        }
+        if (newEnvValues.containsKey(e.name)) {
+            mergedEnv << [name: e.name, value: newEnvValues[e.name]]
+            seen << e.name
+        } else {
+            mergedEnv << e
+        }
+    }
+    newEnvValues.each { k, v ->
+        if (!seen.contains(k)) {
+            mergedEnv << [name: k, value: v]
+        }
+    }
+    containerDef.image = deployImage
+    containerDef.environment = mergedEnv
+    // Repair the secrets block if an old revision predates issue #15.
+    def awsAccount = sh(script: "aws sts get-caller-identity --query Account --output text", returnStdout: true).trim()
+    def secretBase = "arn:aws:ssm:${AWS_DEFAULT_REGION}:${awsAccount}:parameter/flowharbor/${envName}"
+    def preservedSecrets = (containerDef.secrets ?: []).findAll { !(it.name in secretNames) }
+    containerDef.secrets = preservedSecrets + [
+        [name: "GIT_AUTHOR", valueFrom: "${secretBase}/GIT_AUTHOR"],
+        [name: "PIPELINE_URL", valueFrom: "${secretBase}/PIPELINE_URL"]
+    ]
+    def newContainerDef = containerDef
 
     // Preserve the runtime platform from the existing task definition, defaulting
     // to ARM64 Linux if not set (for compatibility with older revisions).
@@ -371,6 +455,7 @@ def promote(envName) {
         cpu: td.taskDefinition.cpu,
         memory: td.taskDefinition.memory,
         runtimePlatform: rp,
+        volumes: td.taskDefinition.volumes ?: [[name: 'tmp'], [name: 'public']],
         containerDefinitions: [newContainerDef]
     ]
 
@@ -396,26 +481,50 @@ def promote(envName) {
 
     echo "  Task Definition: ${family}:${revision}"
 
+    // ---- Post-register hardening assertion (issue #15) ------------------------
+    // Fail closed if the new revision lost hardening (e.g. a future edit
+    // reintroduces an allowlist rebuild). Checks: digest pin, non-root user,
+    // readonly FS, health check, /tmp + /app/public mounts, secrets present
+    // and absent from plaintext environment.
+    def regDef = tdResult.taskDefinition.containerDefinitions[0]
+    def regEnvNames = ((regDef.environment ?: []).collect { it.name }) as Set
+    def regSecretNames = ((regDef.secrets ?: []).collect { it.name }) as Set
+    def regMounts = ((regDef.mountPaths ?: regDef.mountPoints ?: []).collect { it.containerPath }) as Set
+    assert regDef.image.contains('@sha256:') : "ASSERT: image not digest-pinned: ${regDef.image}"
+    assert regDef.user == 'node' : "ASSERT: user != node (got '${regDef.user}')"
+    assert regDef.readonlyRootFilesystem == true : "ASSERT: readonlyRootFilesystem lost"
+    assert regDef.healthCheck != null : "ASSERT: healthCheck missing"
+    assert regMounts.contains('/tmp') : "ASSERT: /tmp mount missing"
+    assert regMounts.contains('/app/public') : "ASSERT: /app/public mount missing"
+    assert regSecretNames.contains('GIT_AUTHOR') && regSecretNames.contains('PIPELINE_URL') : "ASSERT: secrets missing (got ${regSecretNames})"
+    assert !(regEnvNames.contains('GIT_AUTHOR') || regEnvNames.contains('PIPELINE_URL')) : "ASSERT: secrets leaked into environment"
+    echo "  Hardening assertion OK: digest-pinned, user=node, readonlyRootFS, healthCheck, mounts, secrets"
+
     // ---- Update ECS Service ---------------------------------------------------
     // Tell ECS to update the service to use the new task definition revision.
-    // The --force-new-deployment flag ensures a new deployment is triggered
-    // even if the service is already running (e.g., same image tag, new revision).
+    // --force-new-deployment is passed ONLY when the image actually changed
+    // (imageChanged, checked above); otherwise it is omitted to avoid churn.
+    // The no-op early return above already skips identical redeploys.
+    def forceFlag = imageChanged ? '--force-new-deployment' : ''
     sh """
         aws ecs update-service \
             --cluster ${CLUSTER_NAME} \
             --service ${serviceName} \
             --task-definition ${tdArn} \
-            --force-new-deployment
+            ${forceFlag}
     """
 
     // ---- Wait for Service Stability -------------------------------------------
     // Block until the ECS service reports as stable (all tasks in RUNNING state,
     // health checks passing, load balancer registration complete).
-    sh """
-        aws ecs wait services-stable \
-            --cluster ${CLUSTER_NAME} \
-            --services ${serviceName}
-    """
+    // Bounded by timeout so a stuck deployment cannot hang executors (DoS).
+    timeout(time: 10, unit: 'MINUTES') {
+        sh """
+            aws ecs wait services-stable \
+                --cluster ${CLUSTER_NAME} \
+                --services ${serviceName}
+        """
+    }
 
     // ---- Log Service Status ---------------------------------------------------
     // Fetch a summary of the service state for the pipeline logs.

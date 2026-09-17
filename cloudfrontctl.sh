@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TF_DIR="$SCRIPT_DIR/terraform"
+TFVARS="$TF_DIR/terraform.tfvars"
+PLAN_FILE="$TF_DIR/cloudfront.tfplan"
 
 usage() {
     cat <<EOF
@@ -18,10 +20,15 @@ EOF
     exit 1
 }
 
+# Robust parsing: allow leading whitespace before the key.
 get_status() {
-    if grep -Eq '^enable_cloudfront\s*=\s*true' "$TF_DIR/terraform.tfvars" 2>/dev/null; then
+    if [ ! -f "$TFVARS" ]; then
+        echo "enabled (default)"
+        return 0
+    fi
+    if grep -Eq '^[[:space:]]*enable_cloudfront[[:space:]]*=[[:space:]]*true([[:space:]#].*)?$' "$TFVARS"; then
         echo "enabled"
-    elif grep -Eq '^enable_cloudfront\s*=\s*false' "$TF_DIR/terraform.tfvars" 2>/dev/null; then
+    elif grep -Eq '^[[:space:]]*enable_cloudfront[[:space:]]*=[[:space:]]*false([[:space:]#].*)?$' "$TFVARS"; then
         echo "disabled"
     else
         echo "enabled (default)"
@@ -30,6 +37,34 @@ get_status() {
 
 cmd_status() {
     echo "CloudFront is currently: $(get_status)"
+}
+
+# Idempotent edit of the toggle key. Uses mktemp+trap and portable sed
+# (writes to temp file instead of sed -i, which differs between GNU/BSD).
+set_toggle() {
+    local want="$1" tmp
+    tmp="$(mktemp "${TF_DIR}/.terraform.tfvars.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT INT TERM
+    if [ ! -f "$TFVARS" ]; then
+        printf '# CloudFront CDN toggle\nenable_cloudfront = %s\n' "$want" > "$tmp"
+        mv "$tmp" "$TFVARS"
+        trap - EXIT INT TERM
+        return 0
+    fi
+    cp "$TFVARS" "$TFVARS.bak"
+    if grep -Eq '^[[:space:]]*enable_cloudfront[[:space:]]*=' "$TFVARS"; then
+        # Replace only the first occurrence; keep the rest untouched.
+        awk -v want="$want" '{
+            if (!done && $0 ~ /^[[:space:]]*enable_cloudfront[[:space:]]*=/) {
+                print "enable_cloudfront = " want; done=1
+            } else { print }
+        }' "$TFVARS" > "$tmp"
+    else
+        cat "$TFVARS" > "$tmp"
+        printf '\n# CloudFront CDN toggle\nenable_cloudfront = %s\n' "$want" >> "$tmp"
+    fi
+    mv "$tmp" "$TFVARS"
+    trap - EXIT INT TERM
 }
 
 cmd_add() {
@@ -41,17 +76,7 @@ cmd_add() {
     fi
 
     echo "Enabling CloudFront..."
-    cp "$TF_DIR/terraform.tfvars" "$TF_DIR/terraform.tfvars.bak"
-
-    if grep -Eq '^enable_cloudfront' "$TF_DIR/terraform.tfvars"; then
-        sed -i 's/^enable_cloudfront\s*=.*/enable_cloudfront = true/' "$TF_DIR/terraform.tfvars"
-    else
-        cat <<EOF >> "$TF_DIR/terraform.tfvars"
-
-# CloudFront CDN toggle
-enable_cloudfront = true
-EOF
-    fi
+    set_toggle "true"
 
     echo "CloudFront enabled. Run '$0 plan' to review changes."
 }
@@ -65,27 +90,23 @@ cmd_remove() {
     fi
 
     echo "Disabling CloudFront..."
-    cp "$TF_DIR/terraform.tfvars" "$TF_DIR/terraform.tfvars.bak"
-
-    if grep -Eq '^enable_cloudfront' "$TF_DIR/terraform.tfvars"; then
-        sed -i 's/^enable_cloudfront\s*=.*/enable_cloudfront = false/' "$TF_DIR/terraform.tfvars"
-    else
-        cat <<EOF >> "$TF_DIR/terraform.tfvars"
-
-# CloudFront CDN toggle
-enable_cloudfront = false
-EOF
-    fi
+    set_toggle "false"
 
     echo "CloudFront disabled. Run '$0 plan' to review changes."
 }
 
 cmd_plan() {
-    cd "$TF_DIR" && terraform plan
+    cd "$TF_DIR" && terraform fmt -check -recursive
+    cd "$TF_DIR" && terraform validate
+    cd "$TF_DIR" && terraform plan -out "$PLAN_FILE"
 }
 
 cmd_apply() {
-    cd "$TF_DIR" && terraform apply
+    if [ -f "$PLAN_FILE" ]; then
+        cd "$TF_DIR" && terraform apply "$PLAN_FILE"
+    else
+        cd "$TF_DIR" && terraform apply
+    fi
 }
 
 case "${1:-help}" in
