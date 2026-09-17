@@ -87,7 +87,8 @@ module "security_groups" {
 # Module: IAM
 # =============================================================================
 # Creates IAM roles and policies for:
-#   - Jenkins EC2 instances (SSM management, ECR access, ECS deployment, SSM params)
+#   - Jenkins Master EC2 (SSM parameter management, ECR read-only)
+#   - Jenkins Slave EC2 (scoped SSM read, ECR push to app repo, ECS deploy)
 #   - ECS execution role (pull images, write logs)
 #   - ECS task role (future-proof, currently minimal permissions)
 module "iam" {
@@ -134,7 +135,7 @@ module "jenkins_slave" {
   project_name         = var.project_name
   subnet_id            = module.vpc.private_subnet_ids[1]
   security_group_id    = module.security_groups.jenkins_slave_sg_id
-  iam_instance_profile = module.iam.jenkins_instance_profile_name
+  iam_instance_profile = module.iam.jenkins_slave_instance_profile_name
 }
 
 # =============================================================================
@@ -152,7 +153,7 @@ module "jenkins_master" {
   project_name         = var.project_name
   subnet_id            = module.vpc.private_subnet_ids[0]
   security_group_id    = module.security_groups.jenkins_master_sg_id
-  iam_instance_profile = module.iam.jenkins_instance_profile_name
+  iam_instance_profile = module.iam.jenkins_master_instance_profile_name
   domain_name          = var.domain_name
   ecr_repository_url   = module.ecr.repository_url
   depends_on           = [module.jenkins_slave]

@@ -20,6 +20,6 @@ variable "security_group_id" {
 }
 
 variable "iam_instance_profile" {
-  description = "IAM instance profile name for EC2 (provides SSM, ECR permissions)"
+  description = "IAM instance profile name for the Slave (scoped SSM read, ECR push, ECS deploy)"
   type        = string
 }
