@@ -70,3 +70,9 @@ output "jenkins_slave_instance_id" {
   description = "Jenkins Slave EC2 instance ID — for SSM Session Manager or AWS console access"
   value       = module.jenkins_slave.instance_id
 }
+
+# ---- WAF (issue #4) -----------------------------------------------------------
+output "waf_web_acl_arn" {
+  description = "WAFv2 Web ACL ARN protecting the shared ALB (Jenkins allowlist + /login rate limit)"
+  value       = module.waf.web_acl_arn
+}

@@ -88,3 +88,33 @@ variable "alb_restrict_to_cloudfront" {
   type        = bool
   default     = false
 }
+
+# ---- Jenkins WAF Allowlist (issue #4) ----------------------------------------
+# Office/VPN egress CIDRs permitted to reach jenkins.<domain> through the
+# shared-ALB WAF. Default [] denies all internet traffic to Jenkins (secure
+# default) — set to your egress CIDRs, e.g. ["203.0.113.0/24"].
+# Pass via TF_VAR_jenkins_allowed_ipv4_cidrs (JSON list) or tfvars.
+variable "jenkins_allowed_ipv4_cidrs" {
+  description = "IPv4 CIDRs allowed to reach Jenkins via WAF (issue #4). Empty denies all."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.jenkins_allowed_ipv4_cidrs : can(cidrhost(c, 0))])
+    error_message = "Each entry in jenkins_allowed_ipv4_cidrs must be a valid IPv4 CIDR (e.g., \"203.0.113.0/24\")."
+  }
+}
+
+# ---- Jenkins /login Rate Limit (issue #4) ------------------------------------
+# WAF rate-based threshold (requests per 5 min per IP) scoped to
+# jenkins.<domain>/login. AWS minimum is 100.
+variable "jenkins_login_rate_limit" {
+  description = "WAF rate limit for jenkins.<domain>/login per IP per 5 minutes (issue #4)"
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.jenkins_login_rate_limit >= 100 && var.jenkins_login_rate_limit <= 20000
+    error_message = "jenkins_login_rate_limit must be between 100 and 20000."
+  }
+}

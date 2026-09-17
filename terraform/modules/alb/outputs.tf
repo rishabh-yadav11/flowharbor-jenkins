@@ -9,6 +9,11 @@ output "dns_name" {
   value       = aws_lb.this.dns_name
 }
 
+output "arn" {
+  description = "ARN of the ALB — used for WAFv2 Web ACL association (issue #4)"
+  value       = aws_lb.this.arn
+}
+
 output "zone_id" {
   description = "Canonical hosted zone ID of the ALB — required for Route53 alias record creation"
   value       = aws_lb.this.zone_id

@@ -32,3 +32,11 @@ hosted_zone_id = "Z123456789EXAMPLE"
 # breaks direct jenkins/testing/staging on the current single-ALB stack.
 # Only set true after splitting prod onto a dedicated ALB.
 # alb_restrict_to_cloudfront = false
+
+# Jenkins WAF allowlist (issue #4). Default (unset/[]) denies ALL internet
+# traffic to jenkins.<domain> at the WAF — set to office/VPN egress CIDRs.
+# Prefer env var for real values: TF_VAR_jenkins_allowed_ipv4_cidrs='["203.0.113.0/24"]'
+# jenkins_allowed_ipv4_cidrs = ["203.0.113.0/24"]
+
+# WAF brute-force threshold for jenkins.<domain>/login per IP per 5 min.
+# jenkins_login_rate_limit = 100
