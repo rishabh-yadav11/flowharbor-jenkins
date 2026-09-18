@@ -1,11 +1,19 @@
 .terraform/
 *.tfstate
 *.tfstate.backup
-.terraform.lock.hcl
+# NOTE: .terraform.lock.hcl is deliberately NOT ignored. The provider lock is
+# how "reproducible infrastructure" is enforced — without it committed, two
+# people can plan the same code against different provider versions and get
+# different plans. `terraform init` regenerates it locally when missing.
 terraform.tfvars
 terraform/.terraform.tfstate.lock.info
 
 node_modules/
 .next/
+coverage/
+*.tsbuildinfo
+
+# Agent/plan-mode scratch state, not part of the project.
+.omp/
 *.bak
 *.tfplan
