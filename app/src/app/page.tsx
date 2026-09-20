@@ -1,7 +1,15 @@
 import { ParticleField } from "@/components/particle-field"
 import { EnvValue, VersionValue } from "@/components/runtime-badges"
+import { TodoPanel } from "@/components/todo-panel"
+import { getRepository } from "@/lib/todos/repository"
 
-export default function Home() {
+// The list comes from a mutable store, so it must never be prerendered at
+// build time; every request re-reads the repository.
+export const dynamic = "force-dynamic"
+
+export default async function Home() {
+  const todos = await getRepository().list()
+
   return (
     <main className="relative min-h-dvh overflow-hidden bg-[#05060f] text-white">
       <ParticleField />
@@ -27,14 +35,17 @@ export default function Home() {
         </span>
       </div>
 
-      {/* Hero */}
-      <div className="relative z-10 flex min-h-dvh flex-col items-center justify-center px-6 text-center">
-        <h1 className="bg-linear-to-br from-white via-indigo-200 to-indigo-400 bg-clip-text text-6xl font-black tracking-tight text-transparent sm:text-8xl">
-          FlowHarbor
-        </h1>
-        <p className="mt-5 max-w-md text-base text-white/50 sm:text-lg">
-          Every commit, every tag, a flawless release. Built to move. tools
-        </p>
+      {/* Hero + the payload the pipeline actually ships */}
+      <div className="relative z-10 flex min-h-dvh flex-col items-center justify-center gap-8 px-6 text-center">
+        <div>
+          <h1 className="bg-linear-to-br from-white via-indigo-200 to-indigo-400 bg-clip-text text-6xl font-black tracking-tight text-transparent sm:text-8xl">
+            FlowHarbor
+          </h1>
+          <p className="mt-5 max-w-md text-base text-white/50 sm:text-lg">
+            Tag-driven delivery on AWS — this todo list is the payload.
+          </p>
+        </div>
+        <TodoPanel initialTodos={todos} />
       </div>
 
       {/* Bottom metadata */}
