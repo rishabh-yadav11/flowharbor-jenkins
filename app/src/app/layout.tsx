@@ -5,13 +5,18 @@ import "./globals.css"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "FlowHarbor -  Todo App",
-  description: "Todo list app powered by FlowHarbor CI/CD",
+  title: "FlowHarbor — release pipeline demo",
+  description:
+    "A todo app shipped by a tag-driven Jenkins → ECR → ECS Fargate pipeline on AWS",
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // The app renders on a near-black canvas, so the dark token set is the
+    // correct one. Without `dark` on <html>, globals.css :root (light) drives
+    // every shadcn primitive: an almost-white --border and --input disappear
+    // against the dark card, and --primary paints a near-black button.
+    <html lang="en" className="dark">
       <head>
         {/* WARNING (issue #20): keep runtime-config as external src. Never inline
             its contents without serializeRuntimeConfig() escaping (<, >, U+2028/29),
