@@ -9,7 +9,11 @@ export PORT
 # NOTE: /app/public is an EMPTY volume at runtime — baked static assets under
 # public/ are shadowed. Keep only generated files here; app static assets are
 # served from .next/static (standalone build), not public/.
-mkdir -p /tmp /app/public
+# EXPORTED, not just assigned: the node program below reads it through
+# process.env, and a plain shell variable is invisible to child processes —
+# which would make it write to "undefined/runtime-config.js".
+export RUNTIME_CONFIG_DIR="${RUNTIME_CONFIG_DIR:-/app/public}"
+mkdir -p /tmp "$RUNTIME_CONFIG_DIR"
 
 # Build runtime config using Node's JSON.stringify so every value is properly
 # escaped before being embedded into a <script>. Naive shell interpolation
@@ -41,16 +45,15 @@ const cfg = {
   PIPELINE_URL: safeUrl(process.env.PIPELINE_URL, "#"),
 };
 const js = "window.__RUNTIME_CONFIG__=Object.freeze(" + serialize(cfg) + ");";
+// Defence in depth: every value is capped above (128 chars, 2048 for the URL),
+// so the generated payload can never reach 8192 bytes. The same limit is
+// enforced on the TypeScript side in parseRuntimeConfig.
 if (js.length > 8192) { console.error("runtime-config oversize"); process.exit(1); }
-fs.writeFileSync("public/runtime-config.js", js);
-// Versioned copy (issue #19): CloudFront never caches /runtime-config*
-// (CachingDisabled), but a versioned filename additionally busts any
-// downstream/browser cache. Keep the canonical path for backward compat.
-try {
-  const raw = String(process.env.VERSION || cfg.VERSION || "") + "-" + String(process.env.GIT_COMMIT || cfg.GIT_COMMIT || "");
-  const safe = raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "v1";
-  fs.writeFileSync("public/runtime-config." + safe + ".js", js);
-} catch (e) { /* canonical file already written; versioned copy is best-effort */ }
+fs.writeFileSync(process.env.RUNTIME_CONFIG_DIR + "/runtime-config.js", js);
 '
+
+# Test hook: FLOWHARBOR_SKIP_EXEC=1 generates runtime-config.js without starting
+# the server (used by app/tests/entrypoint.test.ts).
+if [ "${FLOWHARBOR_SKIP_EXEC:-0}" = "1" ]; then exit 0; fi
 
 exec node server.js
