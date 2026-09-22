@@ -19,13 +19,17 @@
 #  10. Slave Port: Sets JNLP agent port to 50000
 #  11. Slave Node: Creates the "jenkins-slave" node via Groovy script
 #  12. Agent Secret: Retrieves the JNLP secret and stores in SSM
-#  13. Pipeline Jobs: Creates flowharbor-{dev,staging,prod} manual tag-based jobs
-#  14. ECR Credential: Stores ECR repository URL as Jenkins credential
+#  13. Job DSL File:  Writes the Terraform-rendered flowharbor-jobs.groovy
+#  14. Job Check:     Asserts the JCasC import created the three jobs
+#  15. ECR Credential: Stores ECR repository URL as Jenkins credential
+#  16. Alerts Credential: Stores the SNS alerts topic ARN as Jenkins credential
 #
 # Template variables (replaced by Terraform):
 #   ${project_name}      — Project name (flowharbor)
 #   ${ecr_repository_url} — ECR repository URL
 #   ${domain_name}       — Root domain name (flowharbor.in)
+#   ${github_repo}       — GitHub owner/repo (Jenkinsfile + JCasC source)
+#   ${alerts_topic_arn}  — SNS topic ARN for deploy outcome notifications
 # =============================================================================
 
 # Exit on any error to prevent a partially-configured Jenkins master.
@@ -124,25 +128,83 @@ java -jar /usr/share/jenkins/jenkins-plugin-manager.jar \
     configuration-as-code \
     pipeline-input-step \
     github \
+    timestamper \
     pipeline-utility-steps \
     dark-theme \
     job-dsl \
-    role-strategy \
+    matrix-auth \
     throttle-concurrents
 
 # NOTE (issue #16 — approval gate + deploy-churn DoS):
-#   - role-strategy: provides Role-Based Authorization Strategy. After bootstrap,
-#     create a 'release-managers' role (via JCasC or Groovy in script console) and
-#     assign prod approvers to it. The Jenkinsfile prod Approval stage uses
-#     `input submitter: 'release-managers,admin'`, so only those roles can approve.
-#     Example Groovy (run manually, not in bootstrap to avoid breaking setup):
-#       // import com.michelin.cio.hudson.plugins.rolestrategy.*; ...
+#   - matrix-auth: provides the Global Matrix authorization strategy configured in
+#     jenkins/casc/jenkins.yaml. It is what makes `input submitter:
+#     'release-managers,admin'` enforceable, and what stops an anonymous visitor
+#     from reading a build log. Create the `developer` and `release-managers`
+#     accounts in the Jenkins security realm (Manage Jenkins -> Users) to grant
+#     them anything; the matrix entries are inert until those SIDs exist.
 #   - throttle-concurrents: backs the declarative `rateLimitBuilds` / throttle
 #     option in the Jenkinsfile (max 3 builds/hour) plus disableConcurrentBuilds,
 #     preventing deploy-churn DoS from rapid repeated manual triggers.
 
 # Fix ownership of the downloaded plugins.
 chown -R jenkins:jenkins /var/lib/jenkins/plugins
+
+# ---- Write Job DSL File ------------------------------------------------------
+# The three pipeline jobs are defined as a Terraform-rendered Job DSL script
+# (terraform/user-data/flowharbor-jobs.groovy) rather than inline Groovy here,
+# so the GitHub remote is a template variable instead of a hardcoded URL. This
+# block is a verbatim copy of that file; the two must stay byte-identical.
+#
+# The heredoc delimiter is QUOTED, so the shell performs no expansion inside the
+# body — the ${github_repo} already substituted by Terraform passes through
+# untouched, and the Job DSL's own Groovy is written literally.
+cat > /var/lib/jenkins/flowharbor-jobs.groovy <<'FLOWHARBOR_JOBS_EOF'
+// =============================================================================
+// flowharbor-jobs.groovy — Job DSL source for the three FlowHarbor pipeline jobs
+// =============================================================================
+// Rendered by Terraform (templatefile) into /var/lib/jenkins/flowharbor-jobs.groovy
+// on the Jenkins master at first boot, then executed at controller start by the
+// `jobs: - file:` entry in jenkins/casc/jenkins.yaml.
+//
+// Every job:
+//   - Is triggered MANUALLY only (no GitHub push trigger, no SCM polling)
+//   - Loads the Jenkinsfile from the main branch (Jenkinsfile always current)
+//   - Takes a required GIT_TAG string parameter (the git tag to build/deploy)
+//   - Derives its target environment from the job name suffix
+//
+// REBUILD defaults to true for dev only, so staging and prod promote the exact
+// image digest dev built instead of rebuilding it. The app source tag checkout
+// happens inside the Jenkinsfile itself.
+//
+// Template variable (replaced by Terraform — the ONLY interpolation in this file):
+//   ${github_repo} — owner/repo the Jenkinsfile is read from
+//
+// NOTE: this file is a Terraform template first and Groovy second. Any other
+// dollar-brace sequence would be consumed by templatefile() before Groovy ever
+// sees it, so per-environment names are built by concatenation, not GStrings.
+// =============================================================================
+
+def envs = ['dev', 'staging', 'prod']
+envs.each { e ->
+  pipelineJob('flowharbor-' + e) {
+    description('Tag-driven build and deploy to ' + e + '. Manual trigger only.')
+    logRotator { numToKeep(50) }
+    parameters {
+      stringParam('GIT_TAG', '', 'Git tag to build and deploy (semver, e.g. 1.2.3)')
+      booleanParam('REBUILD', e == 'dev', 'Build and push a new image. When false, deploy the image already in ECR for this tag.')
+      booleanParam('ALLOW_UNSIGNED_TAGS', false, 'Deploy even though the tag commit is not GPG-signed.')
+    }
+    definition {
+      cpsScm {
+        scm { git { remote { url('https://github.com/${github_repo}.git') }; branch('*/main') } }
+        scriptPath('Jenkinsfile')
+        lightweight(true)
+      }
+    }
+  }
+}
+FLOWHARBOR_JOBS_EOF
+chown jenkins:jenkins /var/lib/jenkins/flowharbor-jobs.groovy
 
 # ---- Systemd Service Unit ---------------------------------------------------
 # Create a systemd service file so Jenkins runs as a daemon and restarts
@@ -162,15 +224,21 @@ User=jenkins
 Group=jenkins
 WorkingDirectory=/var/lib/jenkins
 Environment=JENKINS_HOME=/var/lib/jenkins
+Environment="CASC_JENKINS_CONFIG=https://raw.githubusercontent.com/${github_repo}/main/jenkins/casc/jenkins.yaml"
+Environment="JENKINS_ADMIN_ID=admin"
+Environment="JENKINS_ADMIN_PASSWORD=$${ADMIN_PASS}"
+Environment="JENKINS_MASTER_URL=http://$${LOCAL_IP}:8080/"
 ExecStart=/usr/bin/java -Djenkins.install.runSetupWizard=false -Xmx1024m -jar /usr/share/jenkins/jenkins.war --httpPort=8080
 Restart=on-failure
 RestartSec=10
 
 # ---- Hardening --------------------------------------------------------------
-# The admin password is intentionally NOT passed as a systemd environment
-# variable (it would be world-readable plaintext in the unit file). It lives
-# only in SSM Parameter Store as a SecureString. These directives limit the
-# blast radius if Jenkins is ever compromised.
+# The admin password IS passed as a systemd environment variable, because JCasC
+# needs it to create the local 'admin' user. It never touches a file in this
+# repo: $${ADMIN_PASS} is expanded by the shell into the unit file at boot, and
+# the unit file is written as root with 0644 perms. ${github_repo} is a
+# Terraform template variable; $${ADMIN_PASS}/$${LOCAL_IP} are shell variables.
+# These directives limit the blast radius if Jenkins is ever compromised.
 PrivateTmp=true
 ProtectSystem=full
 ReadWritePaths=/var/lib/jenkins /var/log/jenkins /var/cache/jenkins
@@ -263,23 +331,31 @@ aws ssm put-parameter \
     --overwrite \
     --region "$REGION"
 
-# ---- Create Environment Pipeline Jobs ----------------------------------------
-# Create three independent Jenkins pipeline jobs (one per environment):
-#   - flowharbor-dev
-#   - flowharbor-staging
-#   - flowharbor-prod
-# Each job:
-#   - Is triggered MANUALLY only (no GitHub push trigger, no SCM polling)
-#   - Loads the Jenkinsfile from the main branch (Jenkinsfile always current)
-#   - Takes a required GIT_TAG string parameter (the git tag to build/deploy)
-#   - Derives its target environment from the job name suffix
-# The app source tag checkout happens inside the Jenkinsfile itself.
-for env in dev staging prod; do
-  curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
-    -H "Jenkins-Crumb: $CRUMB" \
-    -X POST 'http://localhost:8080/scriptText' \
-    --data-urlencode "script=import jenkins.model.*;import org.jenkinsci.plugins.workflow.job.WorkflowJob;import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition;import hudson.plugins.git.GitSCM;import hudson.plugins.git.BranchSpec;import hudson.plugins.git.UserRemoteConfig;import hudson.model.*;import org.jenkinsci.plugins.workflow.job.properties.*;def i=Jenkins.getInstance();def jn=\"flowharbor-$${env}\";def ex=i.getItem(jn);if(ex){ex.delete()};def j=new WorkflowJob(i,jn);j.addProperty(new ParametersDefinitionProperty(new StringParameterDefinition(\"GIT_TAG\",\"\",\"Git tag to build and deploy (e.g. 1.2.3)\")));def scm=new GitSCM([new UserRemoteConfig(\"https://github.com/rishabh-yadav11/flowharbor-jenkins-demo.git\",null,null,null)],[new BranchSpec(\"*/main\")],false,[],null,null,[]);j.setDefinition(new CpsScmFlowDefinition(scm,\"Jenkinsfile\"));i.add(j,jn);j.save();i.save();println(\"JOB_CREATED_$${env}\")" \
-    --max-time 10
+# ---- Verify Delivery Jobs (created by the JCasC import) ----------------------
+# The three jobs (flowharbor-dev / -staging / -prod) are no longer built from
+# inline Groovy here. They are defined in /var/lib/jenkins/flowharbor-jobs.groovy
+# (written above, before the service starts) and created at boot by the
+# `jobs: - file:` entry in jenkins/casc/jenkins.yaml.
+# Benefits: the jobs are real policy-as-code that survives controller rebuilds,
+# and the GitHub remote is a Terraform variable rather than a hardcoded URL.
+#
+# Assert all three exist. A missing job means the JCasC import failed — and a
+# failed JCasC import aborts the controller boot entirely, so reaching this
+# point at all means the strategy, security realm, and Job DSL were all applied.
+# This is a hard boot failure (exit 1), never a warning: a half-configured
+# controller must never signal "ready".
+for env_name in dev staging prod; do
+  # `curl -f` turns any HTTP error into a non-zero exit, so no curl write-out
+  # format is needed. A printf-style format containing a literal percent-brace
+  # would be parsed by Terraform's templatefile() as a template directive and
+  # fail the whole render, so this check avoids one deliberately.
+  if curl -sf -o /dev/null -u "admin:$ADMIN_PASS" \
+    "http://localhost:8080/job/flowharbor-$env_name/api/json" --max-time 10; then
+    echo "Verified job flowharbor-$env_name"
+  else
+    echo "ERROR: flowharbor-$env_name was not created by the JCasC import" >&2
+    exit 1
+  fi
 done
 
 # ---- Store ECR Repository Credential ----------------------------------------
@@ -301,13 +377,24 @@ curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
   --data-urlencode 'script=import jenkins.model.*;import com.cloudbees.plugins.credentials.*;import com.cloudbees.plugins.credentials.domains.*;import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;import hudson.util.Secret;def i=Jenkins.getInstance();def s=Domain.global();def p=CredentialsProvider.lookupStores(i).iterator().next();def id="ecr-repository-url";def ex=CredentialsProvider.lookupCredentials(StringCredentialsImpl.class,i).find({it.id==id});if(ex){p.removeCredentials(s,ex)};def c=new StringCredentialsImpl(CredentialsScope.GLOBAL,id,"ECR Repository URL",Secret.fromString("${ecr_repository_url}"));p.addCredentials(s,c);i.save();println("ECR_CRED_ADDED")' \
   --max-time 10
 
-# ---- RBAC / Approval Gate Notes (issue #16, comments only) --------------------
-# The prod Approval stage (`input submitter: 'release-managers,admin'`) requires
-# the role-strategy plugin (installed above). To activate post-bootstrap, an admin
-# can run a Groovy snippet via script console / JCasC to define roles, e.g.:
-#   // RoleBasedAuthorizationStrategy: 'release-managers' -> Job/Build, Input/Proceed
-#   // on flowharbor-prod; 'developers' -> Build on flowharbor-dev/staging only.
-# Left as documentation here so first-boot bootstrap stays unchanged and safe.
+# ---- Store Alerts Topic Credential ------------------------------------------
+# Store the KMS-encrypted SNS topic ARN used to publish deploy outcomes. The
+# pipeline reads it via `credentials('alerts-topic-arn')`. The matching
+# `sns:Publish` grant scoped to this one topic is on the slave role (iam module).
+curl -s -u "admin:$ADMIN_PASS" -c "$CJAR" -b "$CJAR" \
+  -H "Jenkins-Crumb: $CRUMB" \
+  -X POST 'http://localhost:8080/scriptText' \
+  --data-urlencode 'script=import jenkins.model.*;import com.cloudbees.plugins.credentials.*;import com.cloudbees.plugins.credentials.domains.*;import org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl;import hudson.util.Secret;def i=Jenkins.getInstance();def s=Domain.global();def p=CredentialsProvider.lookupStores(i).iterator().next();def id="alerts-topic-arn";def ex=CredentialsProvider.lookupCredentials(StringCredentialsImpl.class,i).find({it.id==id});if(ex){p.removeCredentials(s,ex)};def c=new StringCredentialsImpl(CredentialsScope.GLOBAL,id,"SNS Alerts Topic ARN",Secret.fromString("${alerts_topic_arn}"));p.addCredentials(s,c);i.save();println("ALERTS_CRED_ADDED")' \
+  --max-time 10
+
+# ---- RBAC / Approval Gate (issue #16) -----------------------------------------
+# RBAC is no longer a comment. It is applied by Configuration-as-Code, which
+# the controller imports at boot (CASC_JENKINS_CONFIG, set in the systemd unit):
+#   - the 'developer' role (Overall/Read, Job/Read, Job/Build) and the
+#     'release-managers' role (which adds Job/Input/Proceed) are defined in
+#     jenkins/casc/jenkins.yaml.
+# Job/Input/Proceed is what makes the Jenkinsfile prod Approval stage
+# (`input submitter: 'release-managers,admin'`) actually enforce anything.
 
 # ---- Signal Master Ready ----------------------------------------------------
 # Tell the Jenkins Slave that the master has finished bootstrapping and that

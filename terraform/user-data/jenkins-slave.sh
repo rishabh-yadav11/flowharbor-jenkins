@@ -14,6 +14,7 @@
 #   5. Agent Download: Downloads agent.jar from the master
 #   6. Systemd Service: Creates jenkins-agent.service unit
 #   7. Start Agent: Starts the JNLP agent connection
+#   8. Node.js: Installs Node 22 for the pipeline's Verify stage
 #
 # Template variables (replaced by Terraform):
 #   ${project_name} — Project name (flowharbor)
@@ -48,6 +49,14 @@ usermod -aG docker ubuntu 2>/dev/null
 # ---- AWS CLI Installation ---------------------------------------------------
 export PATH=$PATH:/usr/local/bin
 pip3 install awscli --break-system-packages 2>&1 | tail -3
+
+# ---- Node.js Installation ---------------------------------------------------
+# The pipeline's Verify stage runs lint, typecheck and tests on the agent
+# itself (outside Docker), so the host needs a Node toolchain. NodeSource's
+# setup script is the vendor-documented install path — hand-downloading the
+# .deb would need a checksum this repo cannot invent.
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash - 2>&1 | tail -3
+apt-get install -y nodejs 2>&1 | tail -3
 
 # ---- Agent Directory Creation -----------------------------------------------
 # Create the Jenkins agent workspace directory and the working directory.
@@ -206,6 +215,15 @@ SERVICE
 systemctl daemon-reload
 systemctl enable jenkins-agent
 systemctl start jenkins-agent
+
+# ---- Node.js Verification ---------------------------------------------------
+# The last thing this script does. If Node is missing the boot must fail loudly
+# instead of leaving an agent that only breaks later, mid-pipeline.
+if ! command -v node > /dev/null 2>&1; then
+  echo "ERROR: node was not found on PATH after the NodeSource 22.x install"
+  exit 1
+fi
+node --version
 
 # ---- Completion Marker ------------------------------------------------------
 echo "SLAVE_SETUP_COMPLETE"
