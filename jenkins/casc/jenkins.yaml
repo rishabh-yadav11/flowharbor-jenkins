@@ -1,0 +1,84 @@
+# =============================================================================
+# jenkins.yaml — Jenkins Configuration as Code (JCasC)
+# =============================================================================
+# Fetched by the controller at boot from:
+#   https://raw.githubusercontent.com/$github_repo/main/jenkins/casc/jenkins.yaml
+# (wired in via CASC_JENKINS_CONFIG in the systemd unit written by
+# terraform/user-data/jenkins-master.sh).
+#
+# This file is NOT rendered by Terraform — it is fetched raw from GitHub — so the
+# ${...} tokens below are JCasC environment substitutions, resolved from the
+# controller's own environment (JENKINS_ADMIN_ID, JENKINS_ADMIN_PASSWORD,
+# JENKINS_MASTER_URL). They must stay in this exact form.
+#
+# This file replaces the comment-only RBAC notes that used to live in
+# jenkins-master.sh. Every element in it was validated by booting a local
+# controller with the same plugin set (jenkins 2.568.3 + the plugin list in
+# jenkins-master.sh) and importing this exact file — see docs/operations.md
+# for the exact commands.
+#
+# Authorization is a Global Matrix (matrix-auth):
+#   anonymous        read-only, no builds
+#   developer        read + build on the delivery jobs
+#   release-managers read + build; the production approval gate additionally
+#                    names the accounts allowed to press Proceed
+#                    (`input submitter: 'release-managers,admin'` in the
+#                    Jenkinsfile) — the submitter list is a list of ACCOUNTS,
+#                    not a permission, and it is what the role name means here.
+#   admin            full control (the only account created at boot)
+#
+# `developer` and `release-managers` are SID names: create the matching users
+# or groups in the Jenkins security realm (or map them to your IdP) to grant
+# them anything. Until then they are inert — which is the safe direction.
+#
+# PUSH ORDERING: this file must exist on the default branch BEFORE the first
+# `terraform apply`, because the controller fetches it at boot. See
+# docs/operations.md.
+# =============================================================================
+jenkins:
+  mode: EXCLUSIVE
+  # The controller runs no builds: every delivery job pins `agent { label
+  # 'jenkins-slave' }`, and numExecutors: 0 makes "someone built on the master"
+  # impossible rather than merely discouraged.
+  numExecutors: 0
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_ID}"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    globalMatrix:
+      entries:
+        - userOrGroup:
+            name: "anonymous"
+            permissions:
+              - "Overall/Read"
+        - userOrGroup:
+            name: "developer"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+              - "Job/Build"
+        - userOrGroup:
+            name: "release-managers"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+              - "Job/Build"
+        - userOrGroup:
+            name: "${JENKINS_ADMIN_ID}"
+            permissions:
+              - "Overall/Administer"
+  remotingSecurity:
+    enabled: true
+unclassified:
+  location:
+    url: "${JENKINS_MASTER_URL}"
+jobs:
+  # The three delivery jobs come from the Terraform-rendered Job DSL file that
+  # jenkins-master.sh writes before the controller starts. `file:` (not
+  # `script:`) is what makes the jobs exist at import time: with numExecutors 0
+  # there is no way to run a seed job on the controller, and there is no need
+  # to — the DSL is already on disk when Jenkins boots.
+  - file: /var/lib/jenkins/flowharbor-jobs.groovy
