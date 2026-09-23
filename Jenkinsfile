@@ -13,12 +13,19 @@
 // three jobs and enters the GIT_TAG parameter (the git tag to build and deploy).
 //
 // Pipeline stages (in order):
-//   1. Checkout Tag — validate env + tag, resolve tag to immutable SHA, verify,
+//   1. Checkout Tag   — validate env + tag, resolve tag to immutable SHA, verify,
 //      clean workspace and check out the SHA (Jenkinsfile itself from main).
-//   2. Build         — Docker image build, tagged with GIT_TAG only (no :latest)
-//   3. Push to ECR   — Push tag, resolve + verify digest, scan gate, archive metadata
-//   4. Deploy        — Register new TD revision pinned to repo@digest and roll env.
+//   2. Verify         — npm ci, lint, typecheck, enforced coverage gate, and a
+//      CycloneDX SBOM archived as the supply-chain artifact.
+//   3. Build          — Docker image build, tagged with GIT_TAG only (no :latest)
+//   4. Push to ECR    — Push tag, resolve + verify digest, scan gate, archive metadata
+//   5. Resolve Release— (REBUILD=false) resolve the digest dev already built, re-gate
+//   6. Approval       — manual prod gate, release-managers/admin only
+//   7. Deploy         — Register new TD revision pinned to repo@digest and roll env.
 //
+// Stages 3-4 run only when REBUILD=true (dev). Staging and prod run with
+// REBUILD=false and promote the exact digest dev built, so staging and prod
+// can never ship a different image than the one that was scanned and verified.
 // On success, a summary banner with the deployed environment, tag and digest is printed.
 //
 // The `promote()` function encapsulates the logic for registering a new ECS
@@ -67,6 +74,50 @@ def compareSemver(String a, String b) {
     return pa[3] <=> pb[3]
 }
 
+// ECR image-scan gate — fails closed. Polls until the scan reaches COMPLETE,
+// then refuses any CRITICAL finding. An image whose scan never completes is
+// treated as unsafe: the previous `|| true` wait let an unscanned image
+// straight through to a deploy.
+def assertImageScanned(String repoName, String imageId, String label) {
+    def status = ''
+    for (int attempt = 1; attempt <= 10; attempt++) {
+        def probe = sh(
+            script: "aws ecr describe-image-scan-findings --repository-name '${repoName}' --image-id ${imageId} --query 'imageScanFindings.scanStatus' --output text --no-cli-pager",
+            returnStdout: true,
+            returnStatus: true
+        )
+        // returnStdout+returnStatus yields a Map {status, stdout}, not an Integer.
+        if (probe.status == 0) {
+            status = probe.stdout?.trim() ?: ''
+        }
+        if (status == 'COMPLETE') {
+            break
+        }
+        echo "  ECR scan ${status ?: 'PENDING'} for ${label} (attempt ${attempt}/10)"
+        sleep(time: 30, unit: 'SECONDS')
+    }
+    if (status != 'COMPLETE') {
+        error "ECR scan did not reach COMPLETE for ${imageId} after 5m — refusing to deploy an unscanned image"
+    }
+
+    def findingsText = sh(
+        script: "aws ecr describe-image-scan-findings --repository-name '${repoName}' --image-id ${imageId} --query 'imageScanFindings' --output json --no-cli-pager",
+        returnStdout: true
+    ).trim()
+    // A scan that completes with no findingSeverityCounts key is NOT a pass:
+    // treat a missing key as "unknown", never as "zero findings".
+    def findings = readJSON text: findingsText
+    def counts = findings?.findingSeverityCounts
+    if (counts == null) {
+        error "ECR scan returned no findingSeverityCounts for ${imageId}"
+    }
+    def critical = (counts?.CRITICAL == null) ? 0 : counts.CRITICAL
+    if (critical > 0) {
+        error "ECR scan found ${critical} CRITICAL findings for ${imageId}"
+    }
+    echo "  ECR scan clean for ${imageId}"
+}
+
 // ---- Pipeline Definition ----------------------------------------------------
 pipeline {
     agent { label 'jenkins-slave' }
@@ -85,6 +136,13 @@ pipeline {
     parameters {
         string(name: 'GIT_TAG', defaultValue: '',
                description: 'Git tag to build and deploy (e.g. 1.2.3)')
+        // Per-job defaults come from the Job DSL
+        // (terraform/user-data/flowharbor-jobs.groovy): REBUILD is true for dev
+        // only, so staging and prod promote the digest dev built.
+        booleanParam(name: 'REBUILD', defaultValue: false,
+                     description: 'Build and push a new image. When false, deploy the image already in ECR for this tag.')
+        booleanParam(name: 'ALLOW_UNSIGNED_TAGS', defaultValue: false,
+                     description: 'Deploy even though the tag commit is not GPG-signed.')
     }
 
     // ---- Environment Variables ------------------------------------------------
@@ -97,6 +155,10 @@ pipeline {
         // "string". This credential was pre-created during the Jenkins master
         // bootstrap process (see terraform/user-data/jenkins-master.sh).
         ECR_REPOSITORY = credentials('ecr-repository-url')
+
+        // The SNS topic used to publish the deploy outcome. Pre-created during
+        // the Jenkins master bootstrap (see terraform/user-data/jenkins-master.sh).
+        ALERTS_TOPIC_ARN = credentials('alerts-topic-arn')
 
         // Name of the ECS cluster that hosts the Fargate services.
         CLUSTER_NAME = 'flowharbor-cluster'
@@ -144,12 +206,16 @@ pipeline {
                     if (!(tagSha ==~ /^[0-9a-f]{40}$/)) {
                         error "Cannot resolve tag '${env.GIT_TAG}' to a commit SHA (got '${tagSha}')"
                     }
-                    // Require signed tag/commit where available; warn but fail closed
-                    // if neither verifies (unsigned tags rejected).
+                    // Require a signed tag/commit. An unsigned release is a hard
+                    // failure unless the operator explicitly sets
+                    // ALLOW_UNSIGNED_TAGS on the job.
                     def verifyStatus = sh(script: "git verify-tag '${env.GIT_TAG}' 2>&1 || git verify-commit '${tagSha}' 2>&1 || true", returnStdout: true).trim()
                     echo "  Tag verify: ${verifyStatus.take(300)}"
                     if (verifyStatus.contains("no signature found") || verifyStatus.contains("cannot verify")) {
-                        echo "WARNING: tag/commit is unsigned — proceeding only because tag is semver-pinned; enforce signed release tags via GitHub ruleset."
+                        if (env.ALLOW_UNSIGNED_TAGS != 'true') {
+                            error "Unsigned tag/commit ${tagSha} for ${env.GIT_TAG} — refusing to deploy; set ALLOW_UNSIGNED_TAGS to override"
+                        }
+                        echo "  ALLOW_UNSIGNED_TAGS=true: deploying unsigned tag by explicit operator override."
                     }
                     // Clean workspace before checkout to remove stale artifacts.
                     sh "git clean -fdx"
@@ -172,10 +238,33 @@ pipeline {
             }
         }
 
-        // === Stage 2: Build ====================================================
+        // === Stage 2: Verify ===================================================
+        // Run the full local quality suite BEFORE anything is built or pushed.
+        // A lint/typecheck/coverage failure here stops the run before a single
+        // image layer exists, and the SBOM is archived as the supply-chain
+        // artifact for the tag under release.
+        stage('Verify') {
+            steps {
+                dir('app') {
+                    sh "npm ci --ignore-scripts && npm run lint && npm run typecheck && npm run test:coverage"
+                    // cyclonedx-npm is an app/ devDependency, so it only resolves
+                    // from app/node_modules — there is no root package.json.
+                    // Write one level up so archiveArtifacts (workspace-relative)
+                    // finds it, matching the repo's own `sbom` script.
+                    sh "npx --no-install cyclonedx-npm --output-file ../sbom-${env.GIT_TAG}.cdx.json --spec-version 1.6 --omit dev"
+                }
+                archiveArtifacts artifacts: "sbom-*.cdx.json", fingerprint: true
+            }
+        }
+
+        // === Stage 3: Build ====================================================
         // Build the Docker image from the checked-out application source (app/).
         // Tagged with GIT_TAG only — no :latest (ECR is IMMUTABLE, deploy by digest).
+        // Runs only when REBUILD=true: staging/prod promote the dev digest
+        // instead of rebuilding it.
+        // NOTE: `npm ci` moved to the Verify stage — it now runs once per build.
         stage('Build') {
+            when { expression { return env.REBUILD == 'true' } }
             steps {
                 script {
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -189,7 +278,7 @@ pipeline {
                     echo "  Author:  ${GIT_AUTHOR}"
 
                     dir('app') {
-                        sh "npm ci --ignore-scripts && npm audit --audit-level=high"
+                        sh "npm audit --audit-level=high"
                     }
 
                     // Validate ECR before any docker login (fail closed, issue #20).
@@ -209,6 +298,7 @@ pipeline {
         // === Stage 3: Push to ECR ==============================================
         // Authenticate, push GIT_TAG only, resolve + verify digest, scan gate.
         stage('Push to ECR') {
+            when { expression { return env.REBUILD == 'true' } }
             steps {
                 script {
                     // Single validated repo name (issue #20: no split('/')[1]).
@@ -235,20 +325,14 @@ pipeline {
                         error "Digest mismatch: local RepoDigests ${repoDigests} does not contain ${env.IMAGE_DIGEST}"
                     }
 
-                    // Scan gate: wait for scan then fail on CRITICAL findings.
-                    sh "aws ecr wait image-scan-complete --repository-name \"${REPO_NAME}\" --image-id imageTag=\"${env.GIT_TAG}\" || true"
-                    def scanJson = sh(
-                        script: "aws ecr describe-image-scan-findings --repository-name \"${REPO_NAME}\" --image-id imageTag=\"${env.GIT_TAG}\" --query 'imageScanFindings.findingSeverityCounts' --output json --no-cli-pager || echo '{}'",
+                    // Scan gate: fail closed. An image that never reaches
+                    // COMPLETE, or that reports CRITICAL findings, is refused.
+                    assertImageScanned(REPO_NAME, "imageTag=${env.GIT_TAG}", env.GIT_TAG)
+                    env.IMAGE_BUILT_AT = sh(
+                        script: "aws ecr describe-images --repository-name \"${REPO_NAME}\" --image-ids imageTag=\"${env.GIT_TAG}\" --query 'imageDetails[0].imagePushedAt' --output text --no-cli-pager",
                         returnStdout: true
                     ).trim()
-                    echo "  Scan findings: ${scanJson}"
-                    if (scanJson.contains('\"CRITICAL\"')) {
-                        def m = (scanJson =~ /"CRITICAL"\s*:\s*(\d+)/)
-                        if (m.find() && m.group(1).toInteger() > 0) {
-                            error "ECR scan found ${m.group(1)} CRITICAL findings for ${env.GIT_TAG}"
-                        }
-                    }
-                    writeJSON file: "image-metadata-${env.BUILD_ID}.json", json: [tag: env.GIT_TAG, sha: env.GIT_TAG_SHA, digest: env.IMAGE_DIGEST, uriByDigest: env.IMAGE_URI_BY_DIGEST, commit: env.GIT_COMMIT_SHORT]
+                    writeJSON file: "image-metadata-${env.BUILD_ID}.json", json: [tag: env.GIT_TAG, sha: env.GIT_TAG_SHA, digest: env.IMAGE_DIGEST, uriByDigest: env.IMAGE_URI_BY_DIGEST, commit: env.GIT_COMMIT_SHORT, mode: "built", pushedAt: env.IMAGE_BUILT_AT]
                     archiveArtifacts artifacts: "image-metadata-${env.BUILD_ID}.json", fingerprint: true
 
                     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -261,10 +345,58 @@ pipeline {
             }
         }
 
-        // === Stage 3.5: Approval (prod only) =====================================
-        // Manual approval gate for production. Only members of
-        // release-managers/admin may approve. Requires the role-strategy
-        // plugin (see jenkins-master.sh). Non-prod jobs skip via when.
+        // === Stage 5: Resolve Release =========================================
+        // Runs only when REBUILD=false (staging/prod promotion). Resolves the
+        // digest dev already built for this tag and re-asserts the scan gate, so
+        // a promotion can never rebuild, substitute, or skip the scan.
+        stage('Resolve Release') {
+            when { expression { return env.REBUILD != 'true' } }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "  Resolving pre-built image for ${env.GIT_TAG}"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                    def REPO_NAME = ecrRepoName(ECR_REPOSITORY)
+                    echo "  ECR repo:  ${REPO_NAME}"
+                    sh """
+                        aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | \
+                        docker login --username AWS --password-stdin "${ECR_REPOSITORY}"
+                    """
+
+                    def imageText = sh(
+                        script: "aws ecr describe-images --repository-name \"${REPO_NAME}\" --image-ids imageTag=\"${env.GIT_TAG}\" --query 'imageDetails[0]' --output json --no-cli-pager",
+                        returnStdout: true
+                    ).trim()
+                    def image = readJSON text: imageText
+                    def digest = image?.imageDigest
+                    if (!digest) {
+                        error "No image for tag ${env.GIT_TAG} in ${REPO_NAME} — run flowharbor-dev with REBUILD=true first"
+                    }
+                    if (!(digest ==~ /^sha256:[0-9a-f]{64}$/)) {
+                        error "malformed digest ${digest}"
+                    }
+                    env.IMAGE_DIGEST = digest
+                    env.IMAGE_URI_BY_DIGEST = "${ECR_REPOSITORY}@${digest}"
+                    env.IMAGE_BUILT_AT = image?.imagePushedAt ?: ''
+                    echo "  Digest: ${env.IMAGE_DIGEST}"
+                    echo "  URI:    ${env.IMAGE_URI_BY_DIGEST}"
+                    echo "  Pushed: ${env.IMAGE_BUILT_AT}"
+
+                    // The promotion path never pushed, so it gates independently.
+                    assertImageScanned(REPO_NAME, "imageDigest=${digest}", env.GIT_TAG)
+
+                    writeJSON file: "image-metadata-${env.BUILD_ID}.json", json: [tag: env.GIT_TAG, sha: env.GIT_TAG_SHA, digest: env.IMAGE_DIGEST, uriByDigest: env.IMAGE_URI_BY_DIGEST, commit: env.GIT_COMMIT_SHORT, mode: "promoted", pushedAt: env.IMAGE_BUILT_AT]
+                    archiveArtifacts artifacts: "image-metadata-${env.BUILD_ID}.json", fingerprint: true
+                }
+            }
+        }
+
+        // === Stage 6: Approval (prod only) =====================================
+        // Manual approval gate for production. The submitter list is a list of
+        // ACCOUNTS, enforced by the Global Matrix in jenkins/casc/jenkins.yaml:
+        // they need Job/Build to reach the button at all.
+        // Non-prod jobs skip via when.
         stage('Approval') {
             when { expression { return env.TARGET_ENV == 'prod' } }
             steps {
@@ -276,9 +408,10 @@ pipeline {
             }
         }
 
-        // === Stage 4: Deploy ===================================================
-        // Deploy the tagged image directly to this job's target environment.
-        // Prod requires Approval stage + staging promotion-chain check (see promote()).
+        // === Stage 7: Deploy ===================================================
+        // Deploy the digest-pinned image resolved by Push to ECR (REBUILD=true)
+        // or by Resolve Release (REBUILD=false) to this job's target environment.
+        // Prod requires the Approval stage + staging promotion-chain check.
         stage('Deploy') {
             steps {
                 script { promote(TARGET_ENV) }
@@ -291,7 +424,9 @@ pipeline {
     post {
         always {
             // Secure cleanup: never leave task-def JSON or metadata in workspace.
-            sh(script: "rm -f td.json; rm -f image-metadata-*.json; if [ -n \"${WORKSPACE_TMP:-}\" ]; then rm -f \"$WORKSPACE_TMP\"/td-*.json; fi", returnStatus: true)
+            // Single-quoted Groovy string on purpose: ${...} here belongs to the
+            // shell, and a GString would try (and fail) to interpolate it.
+            sh(script: 'rm -f td.json; rm -f image-metadata-*.json; if [ -n "${WORKSPACE_TMP:-}" ]; then rm -f "$WORKSPACE_TMP"/td-*.json; fi', returnStatus: true)
         }
         // On success, print a detailed summary banner showing which environment
         // and tag were deployed.
@@ -326,6 +461,17 @@ pipeline {
                 echo "╚══════════════════════════════════════════════════╝"
                 echo ""
             }
+            // Publish the deploy outcome so a green pipeline is not the only
+            // signal that a release happened. Guarded and run with returnStatus
+            // so a missing topic can never turn a successful deploy red.
+            script {
+                if (env.ALERTS_TOPIC_ARN) {
+                    sh(
+                        script: "aws sns publish --region ${AWS_DEFAULT_REGION} --topic-arn '${env.ALERTS_TOPIC_ARN}' --subject 'FlowHarbor ${TARGET_ENV} SUCCESS' --message 'FlowHarbor ${TARGET_ENV} ${env.GIT_TAG} ${env.IMAGE_DIGEST} ${env.BUILD_URL} SUCCESS'",
+                        returnStatus: true
+                    )
+                }
+            }
         }
 
         // On abort, log the stage where the pipeline was cancelled.
@@ -333,10 +479,37 @@ pipeline {
             echo "Pipeline aborted at stage: ${env.STAGE_NAME}"
         }
 
-        // On failure, log the stage and explicitly set the result to FAILURE.
+        // On failure, roll the service back if we moved it, then notify.
+        // The rollback is armed by promote() only once it is about to call
+        // update-service, so an earlier failure (a failed gate, a failed
+        // services-stable wait) leaves the running service untouched.
         failure {
             echo "Pipeline failed at stage: ${env.STAGE_NAME}"
             script {
+                if (env.DEPLOY_ATTEMPTED == 'true' && env.PREVIOUS_TASK_DEFINITION_REVISION) {
+                    echo "  Rolling back ${env.SERVICE_NAME} to ${env.PREVIOUS_TASK_DEFINITION_REVISION}"
+                    try {
+                        sh """
+                            aws ecs update-service \
+                                --cluster ${CLUSTER_NAME} \
+                                --service ${env.SERVICE_NAME} \
+                                --task-definition ${env.PREVIOUS_TASK_DEFINITION_REVISION} \
+                                --force-new-deployment
+                        """
+                        sh "timeout 600 aws ecs wait services-stable --cluster ${CLUSTER_NAME} --services ${env.SERVICE_NAME}"
+                        echo "  ROLLBACK OK: ${env.SERVICE_NAME} is back on ${env.PREVIOUS_TASK_DEFINITION_REVISION}"
+                    } catch (rollbackErr) {
+                        echo "ROLLBACK FAILED — ${env.SERVICE_NAME} may still be on the bad revision; run: aws ecs update-service --cluster flowharbor-cluster --service ${env.SERVICE_NAME} --task-definition ${env.PREVIOUS_TASK_DEFINITION_REVISION}"
+                    }
+                }
+                // Never fail the build on a notification problem: a wrong or
+                // missing topic must not mask the real failure.
+                if (env.ALERTS_TOPIC_ARN) {
+                    sh(
+                        script: "aws sns publish --region ${AWS_DEFAULT_REGION} --topic-arn '${env.ALERTS_TOPIC_ARN}' --subject 'FlowHarbor ${TARGET_ENV} FAILURE' --message 'FlowHarbor ${TARGET_ENV} ${env.GIT_TAG} ${env.IMAGE_DIGEST} ${env.BUILD_URL} FAILURE'",
+                        returnStatus: true
+                    )
+                }
                 currentBuild.result = 'FAILURE'
             }
         }
@@ -442,6 +615,18 @@ def promote(envName) {
         echo "No-op: image ${deployImage} already deployed to ${envName}; skipping update."
         return
     }
+
+    // ---- Rollback bookkeeping -------------------------------------------------
+    // Record what we are rolling away from, and which service/family we are
+    // touching, so post { failure } can restore the previous revision by itself
+    // if the update-service call or the services-stable wait fails.
+    // Deliberately NOT @NonCPS: promote() calls readJSON/writeJSON, whose Map
+    // returns are not @NonCPS-safe. The extra sh round-trips are cheaper than a
+    // CPS refactor of this function.
+    env.SERVICE_NAME = serviceName
+    env.TARGET_FAMILY = family
+    env.PREVIOUS_TASK_DEFINITION_REVISION = "${family}:${td.taskDefinition.revision}"
+
     // ---- Mutate-in-place + secrets publish (issue #15) --------------------------
     // Mutate the CURRENT container definition: only swap image + non-secret
     // env values. This preserves Terraform-owned hardening (user,
@@ -569,6 +754,9 @@ def promote(envName) {
     // (imageChanged, checked above); otherwise it is omitted to avoid churn.
     // The no-op early return above already skips identical redeploys.
     def forceFlag = imageChanged ? '--force-new-deployment' : ''
+    // From here on, any failure must trigger the automatic rollback in
+    // post { failure }, so arm the flag immediately before the service update.
+    env.DEPLOY_ATTEMPTED = 'true'
     sh """
         aws ecs update-service \
             --cluster ${CLUSTER_NAME} \
