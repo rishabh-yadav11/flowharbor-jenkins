@@ -86,9 +86,9 @@ variable "max_capacity" {
 }
 
 variable "enable_execute_command" {
-  description = "Enable ECS exec. True requires KMS logging config; false disables for least privilege."
+  description = "Enable ECS exec (ssm send-command) so an operator can get a shell into a running task. Session output goes to the KMS-encrypted /ecs/<project>-exec log group via executeCommandConfiguration. Set false to drop the capability entirely."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "ssm_parameter_prefix" {
@@ -101,4 +101,9 @@ variable "log_kms_key_id" {
   description = "KMS key ARN for CloudWatch log group encryption (wired from observability_logging module). Null disables encryption."
   type        = string
   default     = null
+}
+
+variable "todo_table_name" {
+  description = "DynamoDB table holding todos (wired from the dynamodb module). The task role is scoped to this table and the container reads it as TODO_TABLE."
+  type        = string
 }

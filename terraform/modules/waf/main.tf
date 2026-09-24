@@ -237,3 +237,143 @@ resource "aws_wafv2_web_acl_association" "alb" {
   resource_arn = var.alb_arn
   web_acl_arn  = aws_wafv2_web_acl.this.arn
 }
+
+# =============================================================================
+# WAF Request Logging
+# =============================================================================
+# Without logging, a WAF block is an unexplainable 403 for whoever got it: the
+# dashboard shows BlockedRequests but never which rule fired. The log group
+# keeps full WAF visibility; what it must NOT keep is request credentials.
+
+resource "aws_cloudwatch_log_group" "alb" {
+  name              = "/aws/wafv2/${var.project_name}-alb"
+  retention_in_days = 30
+  kms_key_id        = var.logs_kms_key_arn
+}
+
+# WAFv2 attaches the required log-group resource policy itself for a
+# same-account destination, so there is no policy resource to manage here.
+resource "aws_wafv2_web_acl_logging_configuration" "alb" {
+  resource_arn            = aws_wafv2_web_acl.this.arn
+  log_destination_configs = [aws_cloudwatch_log_group.alb.arn]
+
+  # Log the request but not the credentials riding on it. Authorization and
+  # Cookie are the two headers that turn a request log into a credential store.
+  redacted_fields {
+    single_header {
+      name = "authorization"
+    }
+  }
+
+  redacted_fields {
+    single_header {
+      name = "cookie"
+    }
+  }
+}
+
+# =============================================================================
+# CloudFront (edge) Web ACL
+# =============================================================================
+# The ACL above protects the origin. This one protects the edge, where the
+# public internet actually meets CloudFront, and it must be CLOUDFRONT scope —
+# a REGIONAL ACL is silently rejected by the distribution's web_acl_id.
+#
+# Rule shape mirrors the regional ACL's managed-rule statements so a reviewer
+# reading either sees the same two AWS rule groups; the edge adds only a flood
+# guard, because the edge is where volumetric traffic arrives.
+
+resource "aws_wafv2_web_acl" "cloudfront" {
+  count = var.enable_cloudfront ? 1 : 0
+
+  provider    = aws.us_east_1
+  name        = "${var.project_name}-cloudfront-waf"
+  description = "CloudFront edge ACL: AWS managed rules + rate limit (issue #4)"
+  scope       = "CLOUDFRONT"
+
+  default_action {
+    allow {}
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${var.project_name}-cloudfront-waf"
+    sampled_requests_enabled   = true
+  }
+
+  # -- Priority 10: AWS managed common protections -----------------------------
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 10
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        vendor_name = "AWS"
+        name        = "AWSManagedRulesCommonRuleSet"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.project_name}-AWSManagedRulesCommon"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # -- Priority 20: AWS managed known-bad-inputs --------------------------------
+  rule {
+    name     = "AWSManagedRulesKnownBadInputs"
+    priority = 20
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        vendor_name = "AWS"
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.project_name}-AWSManagedRulesBadInputs"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # -- Priority 30: edge flood guard -------------------------------------------
+  # 10k requests per IP per 5 minutes at the edge. Deliberately generous: a
+  # false positive here locks out real users, not a bot.
+  rule {
+    name     = "edge-rate-limit"
+    priority = 30
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit                 = 10000
+        aggregate_key_type    = "IP"
+        evaluation_window_sec = 300
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.project_name}-edge-rate-limit"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  tags = {
+    Name = "${var.project_name}-cloudfront-waf"
+  }
+}

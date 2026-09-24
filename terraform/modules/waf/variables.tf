@@ -40,3 +40,15 @@ variable "jenkins_login_rate_limit" {
     error_message = "jenkins_login_rate_limit must be between 100 and 20000."
   }
 }
+
+variable "logs_kms_key_arn" {
+  description = "KMS key ARN for the WAF request-log log group (wired from the observability_logging module). Null leaves the group on the CloudWatch default key."
+  type        = string
+  default     = null
+}
+
+variable "enable_cloudfront" {
+  description = "Create the CLOUDFRONT-scope Web ACL and associate it with the distribution. False (default) leaves the edge unprotected so a clone can bring the stack up without a us-east-1 dependency."
+  type        = bool
+  default     = false
+}

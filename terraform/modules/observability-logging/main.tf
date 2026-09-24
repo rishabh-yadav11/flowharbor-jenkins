@@ -17,6 +17,16 @@ resource "aws_kms_alias" "logs" {
   target_key_id = aws_kms_key.logs.key_id
 }
 
+# ---- Alerting Topic ----------------------------------------------------------
+# Every CloudWatch alarm in modules/monitoring publishes here, and the Jenkins
+# pipeline publishes its deploy outcome to it. Encrypted with the same project
+# CMK as the log bucket so alert payloads are never readable outside the
+# account and never stored in plaintext.
+resource "aws_sns_topic" "alerts" {
+  name              = "${var.project_name}-alerts"
+  kms_master_key_id = aws_kms_key.logs.arn
+}
+
 resource "aws_s3_bucket" "logs" {
   bucket = "${var.project_name}-logs-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
 }

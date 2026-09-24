@@ -81,3 +81,41 @@ output "waf_web_acl_arn" {
   description = "WAFv2 Web ACL ARN protecting the shared ALB (Jenkins allowlist + /login rate limit)"
   value       = module.waf.web_acl_arn
 }
+
+output "waf_cloudfront_web_acl_arn" {
+  description = "ARN of the CLOUDFRONT-scope Web ACL (null when enable_cloudfront is false)"
+  value       = var.enable_cloudfront ? module.waf.cloudfront_web_acl_arn : null
+}
+
+# ---- Alerting ----------------------------------------------------------------
+output "alerts_topic_arn" {
+  description = "KMS-encrypted SNS topic every CloudWatch alarm and the Jenkins pipeline publish to"
+  value       = module.observability_logging.alerts_topic_arn
+}
+
+output "cloudwatch_dashboard_name" {
+  description = "CloudWatch dashboard name for the app, WAF, and Jenkins signals"
+  value       = module.monitoring.dashboard_name
+}
+
+output "cloudwatch_alarm_arns" {
+  description = "ARNs of all seven CloudWatch alarms"
+  value       = module.monitoring.alarm_arns
+}
+
+# ---- Data Layer --------------------------------------------------------------
+output "dynamodb_table_name" {
+  description = "Name of the todos table — the ECS task's TODO_TABLE"
+  value       = module.dynamodb.table_name
+}
+
+# ---- Configuration -----------------------------------------------------------
+output "github_repo" {
+  description = "GitHub repository the Jenkins jobs clone and the controller fetches its JCasC file from"
+  value       = var.github_repo
+}
+
+output "monthly_budget_usd" {
+  description = "Configured monthly cost limit, and the value the budget actions notify at 80%"
+  value       = var.monthly_budget_usd
+}

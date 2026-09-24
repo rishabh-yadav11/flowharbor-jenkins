@@ -35,11 +35,14 @@ resource "aws_instance" "this" {
     encrypted   = true
   }
 
-  # Bootstrap script with template variables (ECR URL, domain, project name).
+  # Bootstrap script with template variables (ECR URL, domain, project name,
+  # GitHub repo for the Job DSL remote, alert topic for the SNS credential).
   user_data = templatefile("${path.module}/../../user-data/jenkins-master.sh", {
     ecr_repository_url = var.ecr_repository_url
     domain_name        = var.domain_name
     project_name       = var.project_name
+    github_repo        = var.github_repo
+    alerts_topic_arn   = var.alerts_topic_arn
   })
 
   # Recreate the instance whenever the bootstrap script changes so fixes to
