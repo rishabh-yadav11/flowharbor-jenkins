@@ -1,0 +1,31 @@
+# =============================================================================
+# terraform.tfvars.example — Bootstrap (Terraform State) Variables
+# =============================================================================
+# Copy to terraform.tfvars and edit, then:
+#   terraform -chdir=terraform/bootstrap init
+#   terraform -chdir=terraform/bootstrap apply
+#
+# This module is applied ONCE, by hand, before the root module's first
+# `init -migrate-state`. It holds no secrets: the only credential it needs is
+# your normal AWS access, and nothing here is read by the root module.
+# =============================================================================
+
+# Prefix for the KMS alias. Keep it in sync with the root module's project_name.
+project_name = "flowharbor"
+
+# Must match the region in the root module's backend block.
+aws_region = "ap-south-1"
+
+# S3 bucket names are GLOBAL, so "flowharbor-terraform-state" will very likely
+# already be taken. Append your account ID to make it unique:
+#   aws sts get-caller-identity --query Account --output text
+# state_bucket_name = "flowharbor-terraform-state-123456789012"
+state_bucket_name = "flowharbor-terraform-state"
+
+# How long a destroyed state CMK lingers before it is actually deleted. 30 days
+# is the AWS maximum and the safe default.
+kms_key_deletion_window_in_days = 30
+
+# Days to keep superseded state versions. This is the recovery window for a
+# corrupted state file — do not shorten it below a month.
+noncurrent_version_expiration_days = 90
