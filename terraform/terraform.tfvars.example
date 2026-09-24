@@ -12,7 +12,7 @@
 # =============================================================================
 
 # The root domain you own and manage in Route53 (e.g., "example.com").
-domain_name    = "flowharbor.in"
+domain_name    = "example.com"
 
 # Your Route53 hosted zone ID. Find it in the AWS Route53 console under
 # "Hosted zones" — it looks like "Z123456789EXAMPLE".
@@ -40,3 +40,21 @@ hosted_zone_id = "Z123456789EXAMPLE"
 
 # WAF brute-force threshold for jenkins.<domain>/login per IP per 5 min.
 # jenkins_login_rate_limit = 100
+
+# GitHub repo the Jenkins jobs clone and the controller fetches its
+# Configuration-as-Code file from. Default is rishabh-yadav11/flowharbor-jenkins;
+# set it when you fork. The controller reads jenkins/casc/jenkins.yaml from
+# raw.githubusercontent.com at boot, so that file must be pushed before your
+# first apply.
+# github_repo = "rishabh-yadav11/flowharbor-jenkins"
+
+# Monthly cost limit in USD. The budget emails budget_alert_emails at 80% of
+# this. It is a notification threshold, not a hard spend cap. The default (400)
+# sits above the priced floor in docs/cost-model.md; lower it only if you have
+# also removed something the table counts.
+# monthly_budget_usd = 400
+
+# Addresses to notify at 80% of the budget. Empty (the default) creates the
+# budget with no email action. Prefer TF_VAR_budget_alert_emails over a
+# committed tfvars file — a committed address outlives the person who set it.
+# budget_alert_emails = ["you@example.com"]

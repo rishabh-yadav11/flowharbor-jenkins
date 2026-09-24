@@ -364,6 +364,27 @@ resource "aws_iam_role_policy" "jenkins_slave_ssm_secrets_write" {
   })
 }
 
+# Slave publishes the deploy outcome (tag, digest, result) to the alert topic
+# from the post-success / post-failure blocks. One action, one ARN: the slave
+# cannot publish anywhere else, and it gains no subscribe/management rights,
+# so a compromised build agent cannot silence or re-route the pipeline's own
+# delivery signal.
+resource "aws_iam_role_policy" "slave_sns_publish" {
+  name = "${var.project_name}-slave-sns-publish"
+  role = aws_iam_role.jenkins_slave.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "sns:Publish"
+        Resource = var.alerts_topic_arn
+      }
+    ]
+  })
+}
+
 # Instance profile that attaches the Jenkins Slave role to the slave instance.
 resource "aws_iam_instance_profile" "jenkins_slave" {
   name = "${var.project_name}-jenkins-slave-instance-profile"
@@ -524,6 +545,38 @@ resource "aws_iam_role" "ecs_task" {
   tags = {
     Name = "${var.project_name}-ecs-task-role"
   }
+}
+
+# The application container's only AWS access: the todos table (DATA_BACKEND =
+# dynamodb in the task definition). Scoped to this table and its indexes —
+# no BatchWriteItem, no CreateTable, no table deletion, and no access to any
+# other table in the account. This fills the previously permissionless task
+# role, which would otherwise have made the data layer a runtime AccessDenied.
+resource "aws_iam_role_policy" "ecs_task_dynamodb" {
+  name = "${var.project_name}-ecs-task-dynamodb"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan",
+          "dynamodb:Query",
+          "dynamodb:DescribeTable"
+        ]
+        Resource = [
+          var.todo_table_arn,
+          "${var.todo_table_arn}/index/*"
+        ]
+      }
+    ]
+  })
 }
 
 # ---- Data Sources -----------------------------------------------------------

@@ -33,3 +33,18 @@ variable "ecr_repository_url" {
   description = "ECR repository URL passed to the bootstrap script for credential creation"
   type        = string
 }
+
+variable "github_repo" {
+  description = "GitHub repository in owner/name form — rendered into the Job DSL so the pipeline jobs clone the right remote instead of a hardcoded one"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repo))
+    error_message = "github_repo must be in owner/name form (e.g. rishabh-yadav11/flowharbor-jenkins)."
+  }
+}
+
+variable "alerts_topic_arn" {
+  description = "ARN of the KMS-encrypted SNS alert topic, created as the Jenkins alerts-topic-arn string credential and rendered into the bootstrap script"
+  type        = string
+}

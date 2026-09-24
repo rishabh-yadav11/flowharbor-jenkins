@@ -127,3 +127,54 @@ variable "jenkins_login_rate_limit" {
     error_message = "jenkins_login_rate_limit must be between 100 and 20000."
   }
 }
+
+# ---- GitHub Repository -------------------------------------------------------
+# owner/name of the repository the Jenkins jobs clone and the controller fetches
+# its Configuration-as-Code from. A variable, not a literal, because the whole
+# point of rendering it into the bootstrap script is that a fork works without
+# editing a shell script.
+# NOTE: the JCasC file is fetched from raw.githubusercontent.com at controller
+# boot, so this repo's jenkins/casc/jenkins.yaml must be pushed BEFORE the first
+# apply (see docs/operations.md).
+variable "github_repo" {
+  description = "GitHub repository in owner/name form, cloned by the Jenkins jobs and fetched for the JCasC file (e.g. rishabh-yadav11/flowharbor-jenkins)"
+  type        = string
+  default     = "rishabh-yadav11/flowharbor-jenkins"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repo))
+    error_message = "github_repo must be in owner/name form (e.g. rishabh-yadav11/flowharbor-jenkins)."
+  }
+}
+
+# ---- Monthly Budget ---------------------------------------------------------
+# What this stack is allowed to cost before a human is told. It is a notification
+# threshold, not a hard stop: a budget that could silently freeze a production
+# deploy would be a worse failure than an expensive month.
+#
+# The default sits just above the priced floor in docs/cost-model.md (~$315/month
+# for an always-on stack, before traffic-dependent rows). A default below that
+# number would alarm every single month on a perfectly healthy stack, which is
+# the "decorative gate" failure this repo exists to remove.
+variable "monthly_budget_usd" {
+  description = "Monthly cost limit in USD. The budget notification fires at 80% of this, so keep it above the priced floor in docs/cost-model.md."
+  type        = number
+  default     = 400
+
+  validation {
+    condition     = var.monthly_budget_usd > 0
+    error_message = "monthly_budget_usd must be greater than 0."
+  }
+}
+
+# Empty (the default) means the budget exists and reports but emails nobody.
+variable "budget_alert_emails" {
+  description = "Email addresses notified when spend crosses 80% of monthly_budget_usd. Empty (default) = no email action is created."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for e in var.budget_alert_emails : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", e))])
+    error_message = "Each entry in budget_alert_emails must be a valid email address (e.g. you@example.com)."
+  }
+}

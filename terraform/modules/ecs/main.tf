@@ -161,7 +161,9 @@ resource "aws_ecs_task_definition" "dev" {
         { name = "BUILD_NUMBER", value = "0" },
         { name = "GIT_COMMIT", value = "none" },
         { name = "GIT_BRANCH", value = "none" },
-        { name = "TIMESTAMP", value = "none" }
+        { name = "TIMESTAMP", value = "none" },
+        { name = "DATA_BACKEND", value = "dynamodb" },
+        { name = "TODO_TABLE", value = var.todo_table_name }
       ]
       secrets = [
         { name = "GIT_AUTHOR", valueFrom = aws_ssm_parameter.git_author["dev"].arn },
@@ -212,7 +214,9 @@ resource "aws_ecs_task_definition" "staging" {
         { name = "BUILD_NUMBER", value = "0" },
         { name = "GIT_COMMIT", value = "none" },
         { name = "GIT_BRANCH", value = "none" },
-        { name = "TIMESTAMP", value = "none" }
+        { name = "TIMESTAMP", value = "none" },
+        { name = "DATA_BACKEND", value = "dynamodb" },
+        { name = "TODO_TABLE", value = var.todo_table_name }
       ]
       secrets = [
         { name = "GIT_AUTHOR", valueFrom = aws_ssm_parameter.git_author["staging"].arn },
@@ -263,7 +267,9 @@ resource "aws_ecs_task_definition" "prod" {
         { name = "BUILD_NUMBER", value = "0" },
         { name = "GIT_COMMIT", value = "none" },
         { name = "GIT_BRANCH", value = "none" },
-        { name = "TIMESTAMP", value = "none" }
+        { name = "TIMESTAMP", value = "none" },
+        { name = "DATA_BACKEND", value = "dynamodb" },
+        { name = "TODO_TABLE", value = var.todo_table_name }
       ]
       secrets = [
         { name = "GIT_AUTHOR", valueFrom = aws_ssm_parameter.git_author["prod"].arn },
@@ -311,6 +317,11 @@ resource "aws_ecs_service" "dev" {
     rollback = true
   }
 
+  # ECS Exec (ssm send-command) is how an operator gets a shell into a running
+  # task; enable_execute_command above is the switch. Exec session output is
+  # written through the container definition's awslogs configuration, so an
+  # operator's shell transcript lands in this service's /ecs log group.
+
   network_configuration {
     subnets          = var.private_subnet_ids # Private subnets only
     security_groups  = [var.ecs_task_sg_id]
@@ -345,6 +356,8 @@ resource "aws_ecs_service" "staging" {
     rollback = true
   }
 
+  # Exec sessions log through this service's container definition (see dev).
+
   network_configuration {
     subnets          = var.private_subnet_ids
     security_groups  = [var.ecs_task_sg_id]
@@ -377,6 +390,8 @@ resource "aws_ecs_service" "prod" {
     enable   = true
     rollback = true
   }
+
+  # Exec sessions log through this service's container definition (see dev).
 
   network_configuration {
     subnets          = var.private_subnet_ids
@@ -415,6 +430,11 @@ resource "aws_cloudwatch_log_group" "prod" {
   retention_in_days = 90
   kms_key_id        = var.log_kms_key_id
 }
+
+# ECS Exec session transcripts follow the per-service awslogs configuration
+# above: an exec session is consulted while an incident is live, and the
+# container's log group already exists, is KMS-encrypted, and is retained under
+# the same policy as the rest of the service's logs.
 
 # ---- Data Sources -----------------------------------------------------------
 # Fetch the current region for constructing CloudWatch log group ARNs.
