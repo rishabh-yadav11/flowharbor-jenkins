@@ -34,7 +34,7 @@ Every row was executed in this repo unless it says otherwise. None involves
 | Pipeline syntax | `POST /pipeline-model-converter/validate` on a local controller (Jenkins 2.568.3 LTS, same plugin list) | `Jenkinsfile successfully validated.` |
 | Jenkins as code | boot a local controller with `jenkins/casc/jenkins.yaml` | import applies with no errors; the three jobs exist; `REBUILD` default `true` for dev, `false` for staging; anonymous `POST /job/flowharbor-dev/build` → `403`, admin → `201` |
 | CI install | `npm ci --ignore-scripts` on a clean checkout | typecheck clean, 11 files / 77 tests pass, thresholds met — install scripts are skipped and nothing needs them |
-| IaC misconfig scan | `.github/workflows/terraform.yml` (configured, not run here) | Trivy `misconfig`, `severity: HIGH,CRITICAL`, `exit-code: "1"`, ignorefile `.trivyignore`, on every push/PR touching `terraform/**` |
+| IaC misconfiguration scan | `.github/workflows/terraform.yml` (runs on `main`) | green: `trivy config --severity HIGH,CRITICAL --exit-code 1` across the repo. The first real run reported **6** findings — one public ALB (`AWS-0053`) and five port-scoped egress rules (`AWS-0104`) — both ids now suppressed in `.trivyignore` with written justifications. `fmt`, `init` and `validate` pass in the same run |
 
 Provider is `hashicorp/aws 5.100.0`, pinned by the committed `terraform/.terraform.lock.hcl` (`.gitignore:4`).
 
@@ -50,9 +50,9 @@ Provider is `hashicorp/aws 5.100.0`, pinned by the committed `terraform/.terrafo
 | `app/src/components/` | Todo panel, runtime badges, particle field, and the four `ui/` primitives the app now uses |
 | `app/entrypoint.sh` | Boot-time `runtime-config.js` generation — `RUNTIME_CONFIG_DIR` (`app/entrypoint.sh:15`) makes the output dir overridable, `FLOWHARBOR_SKIP_EXEC=1` (`app/entrypoint.sh:57`) makes it testable |
 | `app/tests/` | `entrypoint.test.ts` runs the real `entrypoint.sh` in a temp dir and asserts the boot-config escaping contract |
-| `.github/workflows/` | `ci.yml` (lint + typecheck + coverage on Node 22 and 24, lcov artifact), `terraform.yml` (`fmt -check -recursive`, `init -backend=false`, `validate`, Trivy misconfig scan), `codeql.yml` (push/PR + weekly cron) |
+| `.github/workflows/` | `ci.yml` (lint + typecheck + coverage on Node 22 and 24, lcov artifact), `terraform.yml` (`fmt -check -recursive`, `init -backend=false`, `validate`, `trivy config` misconfiguration scan), `codeql.yml` (push/PR + weekly cron) |
 | `.github/dependabot.yml` | 4 ecosystems (npm in 2 groups, docker, github-actions, terraform), weekly Monday 09:00 UTC, limit 5 |
-| `.trivyignore` | One-entry-per-finding suppression file with justification comments; currently no suppressions |
+| `.trivyignore` | Two check ids with written justifications: `AWS-0053` (the ALB is deliberately internet-facing behind WAF) and `AWS-0104` (five tcp/80-443 egress rules reaching dynamic AWS endpoints and package registries). Severity and `exit-code` stay strict — an empty ignore file still fails the scan |
 | `jenkins/casc/jenkins.yaml` | Configuration-as-Code: security realm, matrix authorization, `numExecutors: 0`, Job DSL import (`jenkins/casc/jenkins.yaml:84`) |
 | `terraform/main.tf` | Root: 16 modules in dependency order, provider `default_tags`, cost budget |
 | `terraform/modules/` | `vpc`, `security-groups`, `iam`, `ecr`, `acm`, `alb`, `waf`, `ecs`, `cloudfront`, `route53`, `observability-logging`, `jenkins-master`, `jenkins-slave`, `dynamodb`, `monitoring`, `governance` |
@@ -210,7 +210,7 @@ needs credentials; the runbook documents it for the operator instead.
 | The Terraform configuration is `fmt`-clean and `validate`-clean with `-backend=false` | Actual IAM role membership in a real account, or that any policy is attached to anything |
 | User-data scripts are syntactically valid, and the Job DSL copy in `jenkins-master.sh` is byte-identical to `flowharbor-jobs.groovy` | Live DNS, ACM issuance, or that `flowharbor.in` and friends resolve or serve this app |
 | Every gate in §4 is present in the pipeline source at the cited line | Live WAF blocks, live alarm/SNS delivery, DynamoDB behaviour under failure |
-| Trivy misconfig scanning is configured to fail on HIGH/CRITICAL | That it has ever run in CI, or what it would report |
+| The misconfiguration scan runs on every push and pull request, fails on HIGH/CRITICAL, and its six current findings are triaged on the record | That the two suppressed ids are the only acceptable trade-off — scoping `ecs_tasks` egress to the VPC CIDR is the sharper option, deliberately not taken because it cannot be verified without an AWS account |
 | The provider is pinned to `hashicorp/aws 5.100.0` by a committed lock file | Measured monthly cost — the cost model is a labelled estimate with a measurement command, not a bill |
 | Deploys use a digest, never a mutable tag, and a rollback path exists in source | ECS task-definition revision history, uptime, throughput, or any SLO |
 
