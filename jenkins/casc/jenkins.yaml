@@ -13,8 +13,9 @@
 #
 # This file replaces the comment-only RBAC notes that used to live in
 # jenkins-master.sh. Every element in it was validated by booting a local
-# controller with the same plugin set (jenkins 2.568.3 + the plugin list in
-# jenkins-master.sh) and importing this exact file — see docs/operations.md
+# controller with the same plugin set (jenkins 2.568.1 — the WAR version
+# jenkins-master.sh downloads — plus the plugin list in jenkins-master.sh) and
+# importing this exact file — see docs/operations.md
 # for the exact commands.
 #
 # Authorization is a Global Matrix (matrix-auth):

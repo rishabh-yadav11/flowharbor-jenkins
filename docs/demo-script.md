@@ -69,7 +69,7 @@ Then look at the promotion path: `Build` and `Push to ECR` run only when `REBUIL
 Three things:
 
 - The root wires 16 modules, and two of those wires are the ones that make the data layer real: the DynamoDB table name goes to both the ECS task definition (`TODO_TABLE`) and the task role's IAM policy. Read `module "dynamodb"`, `module "iam"`, and `module "ecs"` together.
-- The edge WAF ACL is genuinely wired to the distribution now — the origin guard is not decorative. `web_acl_id` is set from the edge ACL when CloudFront is enabled (`terraform/main.tf:354`), and that ACL is in `us-east-1` because WAFv2 rejects a regional ACL at a distribution (`terraform/modules/waf/main.tf:289`).
+- The edge WAF ACL is genuinely wired to the distribution now — the origin guard is not decorative. `web_acl_id` is set from the edge ACL when CloudFront is enabled (`terraform/main.tf:354`), and that ACL is in `us-east-1` because WAFv2 rejects a regional ACL at a distribution (`terraform/modules/waf/main.tf:293`).
 - `default_tags` is set at the provider level (`terraform/main.tf:39`), not per resource, so nothing can forget to be attributed.
 
 ### `app/src/lib/` — "is the payload a real application, or a shell?"

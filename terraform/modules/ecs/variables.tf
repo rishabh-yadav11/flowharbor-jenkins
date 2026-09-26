@@ -86,7 +86,7 @@ variable "max_capacity" {
 }
 
 variable "enable_execute_command" {
-  description = "Enable ECS exec (ssm send-command) so an operator can get a shell into a running task. Session output goes to the KMS-encrypted /ecs/<project>-exec log group via executeCommandConfiguration. Set false to drop the capability entirely."
+  description = "Enable ECS exec (ssm send-command) so an operator can get a shell into a running task. Provider 5.x has no executeCommandConfiguration block on aws_ecs_service, so there is no separate exec log group: session output goes to the service's own KMS-encrypted awslogs group. Set false to drop the capability entirely."
   type        = bool
   default     = true
 }

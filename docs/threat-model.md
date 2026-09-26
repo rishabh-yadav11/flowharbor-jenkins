@@ -12,7 +12,7 @@ Scope: this repository, its pipeline, and the AWS account it configures. This is
 | Release provenance | Which commit, which human, which tag produced the running image | `Jenkinsfile:182` stage 1, task-definition secrets |
 | AWS credentials in CI | Whoever holds the agent role can register task definitions, push images, and publish alerts | `terraform/modules/iam/main.tf:165` (slave role) |
 | The Jenkins controller's admin account | Full control of the controller, and through it of every job | `jenkins/casc/jenkins.yaml:48` |
-| Container secrets (`GIT_AUTHOR`, `PIPELINE_URL`) | Injected as `SecureString`; must never appear in plaintext task-def environment | `terraform/modules/ecs/main.tf:92` |
+| Container secrets (`GIT_AUTHOR`, `PIPELINE_URL`) | Injected as `SecureString`; must never appear in plaintext task-def environment | `terraform/modules/ecs/main.tf:96` |
 | Log and audit data | WAF decisions, VPC flow logs, ECS task output | `terraform/modules/observability-logging/main.tf:30` |
 | Terraform state | Defines every resource above | `terraform/backend.tf:50` (local by default) |
 | The todo data | The app's only mutable state; a bad release can write rows that a task-def rollback does not undo | `terraform/modules/dynamodb/main.tf:19` |
@@ -54,9 +54,9 @@ Scope: this repository, its pipeline, and the AWS account it configures. This is
 | Supply-chain drift | Dependabot across npm, Docker, GitHub Actions and Terraform, weekly, grouped | `.github/dependabot.yml:3`, `.github/dependabot.yml:32` |
 | A malicious PoC or branch name breaking out of the runtime-config `<script>` | Values are JSON-escaped with `<`/`>`/U+2028/U+2029 escaped, capped in length, and URLs restricted to `http:`/`https:` — the config is loaded as an external file, never inlined | `app/entrypoint.sh:36`, `app/src/lib/runtime-config.ts:34`, `app/src/app/layout.tsx:20` |
 | Hostile input reaching the app's own data layer | Title length and control-character validation, id pattern validation, and a conditional put so a create cannot overwrite an existing row | `app/src/lib/todos/validate.ts:13`, `app/src/lib/todos/validate.ts:23`, `app/src/lib/todos/dynamodb.ts:71` |
-| Internet access to the Jenkins controller | WAF IP allowlist on the Jenkins host plus two rate limits, instead of an open security group | `terraform/modules/waf/main.tf:58`, `terraform/modules/waf/main.tf:107`, `terraform/modules/waf/main.tf:130` |
-| WAF decisions being unusable after the fact | Request logging to a 30-day log group with `authorization` and `cookie` redacted | `terraform/modules/waf/main.tf:248`, `terraform/modules/waf/main.tf:264` |
-| Secrets leaking into the task definition's plaintext environment | Secrets delivered through the ECS `secrets` block, and a post-register assertion that fails the deploy if either name appears in `environment` | `terraform/modules/ecs/main.tf:168`, `Jenkinsfile:748` |
+| Internet access to the Jenkins controller | WAF IP allowlist on the Jenkins host plus two rate limits, instead of an open security group | `terraform/modules/waf/main.tf:62`, `terraform/modules/waf/main.tf:111`, `terraform/modules/waf/main.tf:134` |
+| WAF decisions being unusable after the fact | Request logging to a 30-day log group with `authorization` and `cookie` redacted | `terraform/modules/waf/main.tf:252`, `terraform/modules/waf/main.tf:268` |
+| Secrets leaking into the task definition's plaintext environment | Secrets delivered through the ECS `secrets` block, and a post-register assertion that fails the deploy if either name appears in `environment` | `terraform/modules/ecs/main.tf:169`, `Jenkinsfile:748` |
 | A redeploy silently dropping container hardening | Eight post-register assertions on the *registered* revision: digest-pinned image, `user=node`, read-only rootfs, health check, both mounts, secrets present, secrets absent from environment | `Jenkinsfile:741`, `Jenkinsfile:742`, `Jenkinsfile:743`, `Jenkinsfile:748` |
 | A bad deploy left in place | Automatic repoint to the previously captured task-definition revision, armed only immediately before `update-service` | `Jenkinsfile:628`, `Jenkinsfile:759`, `Jenkinsfile:489` |
 | Anyone with matrix access starting a production build | `numExecutors: 0` on the controller, matrix entries that give `Job/Build` to named groups, and a production `input` naming the accounts allowed to proceed | `jenkins/casc/jenkins.yaml:43`, `jenkins/casc/jenkins.yaml:58`, `Jenkinsfile:406` |
@@ -101,7 +101,7 @@ These are outside what this repository can defend, and are stated so nobody read
 - **No app-level auth, rate limiting, or abuse control** beyond the WAF rules described above.
 - **No multi-tenancy** in DynamoDB; the table is single-tenant by construction.
 - **No image signing or provenance attestation.** ECR immutability plus digest pinning is what is implemented; cosign/Sigstore and SLSA provenance need a KMS key or an OIDC trust exchange that cannot be exercised here.
-- **No EDR or runtime threat detection on the Fargate tasks.** ECS Exec is enabled on all three services for operator access (`terraform/modules/ecs/main.tf:307`), which is a debugging capability and also an attack surface.
+- **No EDR or runtime threat detection on the Fargate tasks.** ECS Exec is enabled on all three services for operator access (`terraform/modules/ecs/main.tf:308`), which is a debugging capability and also an attack surface.
 - **Egress is not restricted** from the tasks beyond what the NAT gateways provide.
 - **Repository settings are not in source**: branch protection, secret scanning, and push protection are GitHub account settings, and this repo cannot assert them.
 - **Nothing here has been tested against a live account.** Every anchor was verified by reading the file or by running the project's own local checks; no AWS API response is claimed anywhere in this document.

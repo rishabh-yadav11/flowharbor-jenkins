@@ -9,9 +9,9 @@
 #   - TLS termination using ACM certificate
 #   - Host-based routing to 4 target groups:
 #     - jenkins.flowharbor.in  → Jenkins Master (port 8080)
-#     - testing.flowharbor.in  → Dev Fargate service (port 80)
-#     - staging.flowharbor.in  → Staging Fargate service (port 80)
-#     - flowharbor.in          → Prod Fargate service (port 80)
+#     - testing.flowharbor.in  → Dev Fargate service (port 3000)
+#     - staging.flowharbor.in  → Staging Fargate service (port 3000)
+#     - flowharbor.in          → Prod Fargate service (port 3000)
 #   - Default 404 response for unhandled hostnames
 # =============================================================================
 

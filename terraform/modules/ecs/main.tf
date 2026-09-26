@@ -8,7 +8,8 @@
 #   1. ECS Cluster — with Container Insights enabled
 #   2. Task Definitions (x3) — dev, staging, prod (Fargate, ARM64)
 #   3. ECS Services (x3) — one per environment, tied to ALB target groups
-#   4. CloudWatch Log Groups (x3) — one per environment (7-day retention)
+#   4. CloudWatch Log Groups (x3) — one per environment (30-day dev/staging,
+#      90-day prod retention; see the Retention comment at the log groups below)
 #
 # The container image and environment variables are set at task definition
 # creation time. The Jenkins pipeline updates these by registering new

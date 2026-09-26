@@ -14,6 +14,10 @@
 #   0  jenkins-ip-guard          — Host == jenkins.<domain> AND source IP NOT
 #                                  in allowlist → 403. Empty allowlist denies
 #                                  all (secure default).
+#   5  global-rate-limit         — per-IP rate limit across all hosts on the
+#                                  shared ALB, so a flooded testing/staging/prod
+#                                  host cannot starve jenkins.<domain> (or the
+#                                  reverse) of ALB connection capacity.
 #   10 jenkins-login-rate-limit   — rate-blocks IPs hammering
 #                                  jenkins.<domain>/login (brute-force guard).
 #   20 AWSManagedRulesCommonRuleSet

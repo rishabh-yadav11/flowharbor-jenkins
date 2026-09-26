@@ -7,7 +7,7 @@ The system has two halves that barely talk to each other at runtime:
 - **The application** — a Next.js 16 App Router server (`app/`), built into a container image, run on ECS Fargate behind one shared ALB, storing todos in DynamoDB.
 - **The delivery system** — a GitHub Actions gate on pull requests, and a Jenkins controller plus agent that build, scan, promote and roll back that image.
 
-Everything runs in `ap-south-1` except the CloudFront-scope WAF ACL, which must live in `us-east-1` (`terraform/main.tf:60`, `terraform/modules/waf/main.tf:289`).
+Everything runs in `ap-south-1` except the CloudFront-scope WAF ACL, which must live in `us-east-1` (`terraform/main.tf:60`, `terraform/modules/waf/main.tf:293`).
 
 ---
 
@@ -82,9 +82,9 @@ graph LR
 
 **Legend — where the boundaries are and why.**
 
-- **TB-1, internet → edge.** Everything arriving here is untrusted. The WAF ACL (`terraform/modules/waf/main.tf:41`) carries a host-based rule that allows `jenkins.<domain>` only from a configured IPv4 allowlist (`terraform/modules/waf/main.tf:58`), a global rate limit, a tighter rate limit on the Jenkins login path, and the AWS `CommonRuleSet` and `KnownBadInputsRuleSet` managed groups (`terraform/modules/waf/main.tf:186`, `terraform/modules/waf/main.tf:209`). WAF decisions are logged to a 30-day CloudWatch log group with `authorization` and `cookie` redacted (`terraform/modules/waf/main.tf:248`, `terraform/modules/waf/main.tf:256`, `terraform/modules/waf/main.tf:264`).
+- **TB-1, internet → edge.** Everything arriving here is untrusted. The WAF ACL (`terraform/modules/waf/main.tf:45`) carries a host-based rule that allows `jenkins.<domain>` only from a configured IPv4 allowlist (`terraform/modules/waf/main.tf:62`), a global rate limit, a tighter rate limit on the Jenkins login path, and the AWS `CommonRuleSet` and `KnownBadInputsRuleSet` managed groups (`terraform/modules/waf/main.tf:190`, `terraform/modules/waf/main.tf:213`). WAF decisions are logged to a 30-day CloudWatch log group with `authorization` and `cookie` redacted (`terraform/modules/waf/main.tf:252`, `terraform/modules/waf/main.tf:260`, `terraform/modules/waf/main.tf:268`).
 - **TB-2, edge → origin.** TLS terminates at the ALB with a modern policy (`terraform/modules/alb/main.tf:155`) and the certificate from ACM. When CloudFront is enabled, the prod listener rule additionally requires the secret origin-verify header, so an origin-direct request for the production hostname gets the 404 default instead of the prod target group (`terraform/modules/alb/main.tf:266`).
-- **TB-3, origin → data.** The task runs as the unprivileged `node` user with a read-only root filesystem and exactly two writable mounts, `/tmp` and `/app/public` (`terraform/modules/ecs/main.tf:45`, `terraform/modules/ecs/main.tf:46`). The task role is scoped to seven DynamoDB actions on one table (`terraform/modules/iam/main.tf:555`). The pipeline re-asserts all of this against the *registered* task definition after every deploy rather than trusting the source (`Jenkinsfile:741` through `Jenkinsfile:748`).
+- **TB-3, origin → data.** The task runs as the unprivileged `node` user with a read-only root filesystem and exactly two writable mounts, `/tmp` and `/app/public` (`terraform/modules/ecs/main.tf:47`, `terraform/modules/ecs/main.tf:48`). The task role is scoped to seven DynamoDB actions on one table (`terraform/modules/iam/main.tf:555`). The pipeline re-asserts all of this against the *registered* task definition after every deploy rather than trusting the source (`Jenkinsfile:741` through `Jenkinsfile:748`).
 - **Jenkins ingress is a separate surface**, not a fifth hop on this path: it is a distinct host rule, gated at L7 by the WAF IP allowlist rather than by a security group, and it reaches a controller that runs no builds itself (`jenkins/casc/jenkins.yaml:43`).
 
 **Where the runtime config comes from.** Not the image. The container's entrypoint writes `public/runtime-config.js` at every boot from the environment ECS injected (`app/entrypoint.sh:15`, `app/entrypoint.sh:52`, `app/entrypoint.sh:59`); the browser fetches it as an external script (`app/src/app/layout.tsx:20`) and reads it through a hook (`app/src/lib/runtime-config.ts:89`). This is what lets one immutable digest render as dev, staging or prod — see [ADR 0005](adr/0005-runtime-config-at-container-boot.md). Values are capped and escaped, so a hostile tag name cannot break out of the `<script>` (`app/entrypoint.sh:36`, `app/src/lib/runtime-config.ts:16`).
@@ -195,7 +195,7 @@ graph TD
 
 Two edges are not ordinary dependencies:
 
-- `waf → cloudfront` exists only when `enable_cloudfront = true`, and it crosses regions — the edge ACL is created in `us-east-1` because WAFv2 rejects a `REGIONAL` ACL at a distribution's `web_acl_id` (`terraform/main.tf:354`, `terraform/modules/waf/main.tf:289`).
+- `waf → cloudfront` exists only when `enable_cloudfront = true`, and it crosses regions — the edge ACL is created in `us-east-1` because WAFv2 rejects a `REGIONAL` ACL at a distribution's `web_acl_id` (`terraform/main.tf:354`, `terraform/modules/waf/main.tf:293`).
 - `bootstrap → root` is a *sequence*, not a reference. The state bucket cannot be created by the module whose state it holds, so it is a separate root module applied first (`terraform/backend.tf:20`). The root's own S3 backend block stays commented out so that a clone can run `terraform init -backend=false && terraform validate` with no AWS credentials at all (`terraform/backend.tf:7`).
 
 ---

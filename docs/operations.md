@@ -72,7 +72,7 @@ Notes:
 aws ssm get-parameter --name /flowharbor/jenkins-master-ready
 ```
 
-The bootstrap writes the admin password, the master URL, and this ready marker into Parameter Store, then prints `MASTER_SETUP_COMPLETE` to the console (`terraform/user-data/jenkins-master.sh:407`). CloudWatch-init needs a few minutes; `terraform output jenkins_url` gives the controller URL, and `terraform output jenkins_admin_password_command` gives the command that prints the admin password.
+The bootstrap writes the admin password, the master URL, and this ready marker into Parameter Store, then prints `MASTER_SETUP_COMPLETE` to the console (`terraform/user-data/jenkins-master.sh:411`). CloudWatch-init needs a few minutes; `terraform output jenkins_url` gives the controller URL, and `terraform output jenkins_admin_password_command` gives the command that prints the admin password.
 
 ---
 
