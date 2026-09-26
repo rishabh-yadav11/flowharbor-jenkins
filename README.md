@@ -34,9 +34,13 @@ Every row was executed in this repo unless it says otherwise. None involves
 | Pipeline syntax | `POST /pipeline-model-converter/validate` on a local controller (Jenkins 2.568.3 LTS, same plugin list) | `Jenkinsfile successfully validated.` |
 | Jenkins as code | boot a local controller with `jenkins/casc/jenkins.yaml` | import applies with no errors; the three jobs exist; `REBUILD` default `true` for dev, `false` for staging; anonymous `POST /job/flowharbor-dev/build` → `403`, admin → `201` |
 | CI install | `npm ci --ignore-scripts` on a clean checkout | typecheck clean, 11 files / 77 tests pass, thresholds met — install scripts are skipped and nothing needs them |
-| IaC misconfiguration scan | `.github/workflows/terraform.yml` (runs on `main`) | green: `trivy config --severity HIGH,CRITICAL --exit-code 1` across the repo. The first real run reported **6** findings — one public ALB (`AWS-0053`) and five port-scoped egress rules (`AWS-0104`) — both ids now suppressed in `.trivyignore` with written justifications. `fmt`, `init` and `validate` pass in the same run |
+| IaC misconfiguration scan | `.github/workflows/terraform.yml` (runs on `main`) | green on `main` at `e88a929` (2026-09-26), Trivy `v0.74.0`: `trivy config --severity HIGH,CRITICAL --exit-code 1` over the repo root. The first real run reported **6** findings — one public ALB (`AWS-0053`) and five port-scoped egress rules (`AWS-0104`) — both ids suppressed in `.trivyignore` with written justifications. The gate is still armed: the same scan with an empty ignore file exits `1`. `fmt`, `init` and `validate` pass in the same run |
 
 Provider is `hashicorp/aws 5.100.0`, pinned by the committed `terraform/.terraform.lock.hcl` (`.gitignore:4`).
+
+Every row above is evidence about the date it names and the versions it pins. A green run is not
+a standing guarantee: the action, Trivy's check bundle, and the provider lock all move, so the
+honest reading of this table is "verified on that day, against those versions".
 
 ## 2. Repository map
 
@@ -210,7 +214,7 @@ needs credentials; the runbook documents it for the operator instead.
 | The Terraform configuration is `fmt`-clean and `validate`-clean with `-backend=false` | Actual IAM role membership in a real account, or that any policy is attached to anything |
 | User-data scripts are syntactically valid, and the Job DSL copy in `jenkins-master.sh` is byte-identical to `flowharbor-jobs.groovy` | Live DNS, ACM issuance, or that `flowharbor.in` and friends resolve or serve this app |
 | Every gate in §4 is present in the pipeline source at the cited line | Live WAF blocks, live alarm/SNS delivery, DynamoDB behaviour under failure |
-| The misconfiguration scan runs on every push and pull request, fails on HIGH/CRITICAL, and its six current findings are triaged on the record | That the two suppressed ids are the only acceptable trade-off — scoping `ecs_tasks` egress to the VPC CIDR is the sharper option, deliberately not taken because it cannot be verified without an AWS account |
+| The misconfiguration scan runs on every push and pull request, fails on HIGH/CRITICAL, and its six current findings are triaged on the record | That the two suppressed ids stay justified as the architecture changes, or that the pinned check bundle still covers this stack's surface. Both are re-asserted only by a human reading `.trivyignore`, and a bare id suppresses that check everywhere, including occurrences that do not exist yet |
 | The provider is pinned to `hashicorp/aws 5.100.0` by a committed lock file | Measured monthly cost — the cost model is a labelled estimate with a measurement command, not a bill |
 | Deploys use a digest, never a mutable tag, and a rollback path exists in source | ECS task-definition revision history, uptime, throughput, or any SLO |
 
