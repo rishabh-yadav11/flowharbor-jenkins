@@ -5,10 +5,14 @@ on:
     paths:
       - "terraform/**"
       - ".github/workflows/terraform.yml"
+      # A change to the suppression file must re-run the scan, or a
+      # suppression could be widened with nothing ever re-checking it.
+      - ".trivyignore"
   pull_request:
     paths:
       - "terraform/**"
       - ".github/workflows/terraform.yml"
+      - ".trivyignore"
 
 permissions:
   contents: read
