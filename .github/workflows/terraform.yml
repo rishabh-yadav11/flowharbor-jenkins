@@ -56,7 +56,7 @@ jobs:
         # The tag is v-prefixed (`0.33.0` is not a ref), and the input is
         # `trivyignores` — `ignorefile` is not an input of this action. Both
         # mistakes fail at action-input validation, before the scan runs.
-        uses: aquasecurity/trivy-action@v0.33.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           # The action passes scan-type straight through as the Trivy
           # subcommand, and `misconfig` was folded into `config` upstream:
