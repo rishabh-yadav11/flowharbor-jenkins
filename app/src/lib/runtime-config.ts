@@ -89,6 +89,10 @@ export function parseRuntimeConfig(raw: unknown): RuntimeConfig {
 export function useRuntimeConfig(): RuntimeConfig | null {
   const [config, setConfig] = useState<RuntimeConfig | null>(null)
 
+  // Syncing an external system (the boot-time window.__RUNTIME_CONFIG__ global)
+  // into React state is exactly what an effect is for: the value is read once
+  // on mount, never re-read, and never triggers a cascading render loop.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const w = window as unknown as { __RUNTIME_CONFIG__?: unknown }
     const cfg = w.__RUNTIME_CONFIG__
