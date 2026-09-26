@@ -1,1 +1,27 @@
-# One entry per line: <check-id> # justification
+# .trivyignore — one check id per line, each with a written justification.
+#
+# The gate itself stays strict: `severity: HIGH,CRITICAL` and `exit-code: 1`.
+# Nothing is disabled to make the scan pass; these two entries record findings
+# that were reviewed and judged acceptable for this architecture, with the
+# reason. A new finding of either id, in a new place, still fails the run.
+
+# The load balancer is internet-facing by design. The architecture is one
+# shared ALB carrying four host rules, fronted by a regional WAF ACL that
+# allowlists the Jenkins host and rate-limits /login. Making the ALB internal
+# would remove the dev/staging/jenkins hostnames from the public internet, so
+# the finding is the intended topology rather than an oversight. Residual risk:
+# the ALB is public, and WAF is the only thing between it and the origin.
+AWS-0053
+
+# Five port-scoped egress rules on 0.0.0.0/0 (tcp/80 and tcp/443 only) for the
+# controller, the build agent, and the Fargate tasks: ECR, SSM, CloudWatch
+# Logs, the plugin and package registries, GitHub, and the JNLP callback.
+# Trivy flags any 0.0.0.0/0 egress regardless of port, but these are not
+# open-to-everything rules. The destinations are dynamic (AWS service
+# endpoints and public registries), so pinning CIDRs here would break the
+# build agent's package installs rather than harden anything.
+#
+# Known sharper option, deliberately not taken because it cannot be verified
+# without an AWS account: scope the ecs_tasks egress to the VPC CIDR plus the
+# VPC interface endpoints, which would close the widest of the five.
+AWS-0104
