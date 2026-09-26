@@ -58,7 +58,11 @@ jobs:
         # mistakes fail at action-input validation, before the scan runs.
         uses: aquasecurity/trivy-action@v0.33.0
         with:
-          scan-type: misconfig
+          # The action passes scan-type straight through as the Trivy
+          # subcommand, and `misconfig` was folded into `config` upstream:
+          # with the old value the step dies with
+          # `unknown command "misconfig" for "trivy"`.
+          scan-type: config
           scan-ref: .
           severity: HIGH,CRITICAL
           exit-code: "1"
