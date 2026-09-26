@@ -9,6 +9,14 @@ const Checkbox = React.forwardRef<
   React.ElementRef<typeof CheckboxPrimitive.Root>,
   React.ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root>
 >(({ className, ...props }, ref) => (
+  // The checked state pairs `bg-primary` with `text-primary-foreground`, never
+  // `text-foreground`: in the dark token set (globals.css `.dark`) both
+  // --primary and --foreground are `210 40% 98%`, so `text-foreground` would
+  // paint the tick near-white on a near-white box. The Indicator inherits this
+  // colour through `text-current`. jsdom cannot compute the Tailwind cascade,
+  // so this pairing is documented here rather than unit-tested; the visual
+  // assertion is a computed-style check in a real browser
+  // (`[data-state="checked"]` colour must differ from its background).
   <CheckboxPrimitive.Root
     ref={ref}
     className={cn(

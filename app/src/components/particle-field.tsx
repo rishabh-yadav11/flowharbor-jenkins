@@ -22,7 +22,7 @@ export function ParticleField() {
     if (!ctx) return
 
     let raf = 0
-    let particles: Particle[] = []
+    const particles: Particle[] = []
     let visible = true
     let inView = true
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
