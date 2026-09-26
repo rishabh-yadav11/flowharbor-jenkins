@@ -161,10 +161,10 @@ Terraform sets it on every service and the pipeline asserts it survived:
 
 | Property | Terraform | Assertion |
 |---|---|---|
-| Runs as non-root `node` | `terraform/modules/ecs/main.tf:45` | `Jenkinsfile:742` |
-| Read-only root filesystem | `terraform/modules/ecs/main.tf:46` | `Jenkinsfile:743` |
-| Never privileged | `terraform/modules/ecs/main.tf:47` | — (asserted by construction in Terraform) |
-| Container health check | `terraform/modules/ecs/main.tf:51` | `Jenkinsfile:744` |
+| Runs as non-root `node` | `terraform/modules/ecs/main.tf:46` | `Jenkinsfile:742` |
+| Read-only root filesystem | `terraform/modules/ecs/main.tf:47` | `Jenkinsfile:743` |
+| Never privileged | `terraform/modules/ecs/main.tf:48` | — (asserted by construction in Terraform) |
+| Container health check | `terraform/modules/ecs/main.tf:52` | `Jenkinsfile:744` |
 | Writable `/tmp` and `/app/public` only | `app/entrypoint.sh:6` | `Jenkinsfile:745`, `Jenkinsfile:746` |
 | Unprivileged port 3000 | `app/Dockerfile:14`, `app/Dockerfile:22` | — |
 | Digest-pinned base image | `app/Dockerfile:1`, `app/Dockerfile:10` | — |

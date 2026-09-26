@@ -222,7 +222,7 @@ npm run sbom        # CycloneDX 1.6, dev dependencies omitted
 ```bash
 cd app && npm ci && npm run lint && npm run typecheck && npm run test:coverage && npm run build
 terraform -chdir=terraform init -backend=false -input=false && terraform -chdir=terraform fmt -check -recursive && terraform -chdir=terraform validate
-docker run --rm -e JAVA_OPTS=-Djenkins.install.runSetupWizard=false jenkins/jenkins:lts-jdk21   # then POST the Jenkinsfile to /pipeline-model-converter/validate
+docker run --rm -e JAVA_OPTS=-Djenkins.install.runSetupWizard=false jenkins/jenkins:2.568.1-jdk21   # then POST the Jenkinsfile to /pipeline-model-converter/validate
 ```
 
 **You will see:** the app on `localhost:3000` with a working todo list (3
