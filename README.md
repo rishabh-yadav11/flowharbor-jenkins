@@ -1,4 +1,4 @@
-# FlowHarbor — a Next.js todo app delivered by Jenkins → ECR → ECS Fargate, provisioned with Terraform
+# FlowHarbor — a Next.js  app delivered by Jenkins → ECR → ECS Fargate, provisioned with Terraform
 
 This repo is a case study in delivery mechanics: a small but real Next.js todo app (`app/`)
 is built, scanned, and deployed to AWS ECS Fargate by a tag-driven Jenkins → ECR → ECS
@@ -7,8 +7,7 @@ path **fail closed** rather than decorative. A reviewer with no AWS account, no 
 and no paid Jenkins run can clone it, run the whole quality suite, validate the pipeline
 with Jenkins' own declarative linter, and `terraform validate` the infrastructure.
 
-Everything claimed as verified below was verified that way — offline. The endpoints are the
-*intended* targets of a deployment this repo builds; it cannot prove they serve anything.
+
 
 | Environment | Intended URL | Jenkins job | Parameters |
 |---|---|---|---|
