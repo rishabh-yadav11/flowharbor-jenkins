@@ -63,3 +63,8 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           trivyignores: .trivyignore
+          # The action defaults to a Trivy whose contrib/install.sh no longer
+          # resolves a release asset, so the step dies in setup before the scan
+          # runs. Pin the version the offline scan was verified with, so CI and
+          # a local `trivy config` report the same findings.
+          version: v0.74.0
