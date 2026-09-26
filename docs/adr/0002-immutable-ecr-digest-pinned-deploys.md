@@ -1,0 +1,7 @@
+# ADR 0002 — Immutable ECR with digest-pinned deploys
+
+- **Status:** Accepted
+- **Context:** Tag-based deploys are only reproducible if the tag cannot be silently repointed between staging and prod; a mutable tag also makes "what is running in prod" answerable only by asking whoever last pushed.
+- **Decision:** The ECR repository sets `image_tag_mutability = "IMMUTABLE"` and `force_delete = false` (`terraform/modules/ecr/main.tf:20`, `terraform/modules/ecr/main.tf:22`), every image is tagged with the release tag and never `:latest`, and the deployed image is always the digest-pinned URI `repo@sha256:…` — enforced as a pre-deploy refusal to deploy by mutable tag (`Jenkinsfile:581`), a post-register assertion that the registered revision's image contains `@sha256:` (`Jenkinsfile:741`), a regex check on a promoted digest (`Jenkinsfile:377`), and a check that the local image's `RepoDigests` contains the resolved digest after the push (`Jenkinsfile:325`).
+- **Consequences:** A staging deployment is bit-for-bit what prod later runs, a rebuild of the same tag is impossible by construction, and rollback is "deploy an older tag" rather than "guess what the old image was"; the cost is that an image can never be re-pushed under the same tag, so every rebuild needs a new tag.
+- **Rejected alternative:** Mutable tags with a `latest` alias — rejected because it makes the prod deployment a function of push order, and the digest pin is the property the whole promotion chain (staging → prod) is checked against (`Jenkinsfile:595`).
