@@ -17,7 +17,7 @@ declarative linter, and `terraform validate` the infrastructure.
 | Dev | `https://testing.flowharbor.in` | `flowharbor-dev` | `GIT_TAG`, `REBUILD` (default **true**), `ALLOW_UNSIGNED_TAGS` |
 | Staging | `https://staging.flowharbor.in` | `flowharbor-staging` | `GIT_TAG`, `REBUILD` (default false), `ALLOW_UNSIGNED_TAGS` |
 | Production | `https://flowharbor.in` | `flowharbor-prod` | as staging, plus the `Approval` gate |
-| CI | `https://jenkins.flowharbor.in` | — | controller behind ALB + WAF allowlist |
+| CI | `https://jenkins.flowharbor.in` | n/a | controller behind ALB + WAF allowlist |
 
 Read [SECURITY.md](SECURITY.md) for the security policy and the full control
 inventory, and [`docs/threat-model.md`](docs/threat-model.md) for what is being
@@ -33,17 +33,17 @@ Every row below was executed against this repository. None of them involves
 | Check | Exact command | Result |
 |---|---|---|
 | Typecheck / lint | `cd app && npm run typecheck` · `npm run lint` | both clean, no output |
-| Tests + coverage gate | `cd app && npm run test:coverage` | **11 files / 77 tests pass**; 88.33% statements, 86.93% branches, 97.5% functions, 88.33% lines — every configured threshold met, exit 0 |
-| Build | `cd app && npm run build` | success; route table lists `ƒ /` and `ƒ /api/health` |
-| Health endpoint | `npm run start`, then `curl -i localhost:3000/api/health` | `200`, `Cache-Control: no-store`, `"status":"ok"`, `"env":"dev"`, `checks.database` present; with `DATA_BACKEND=dynamodb` and an empty `TODO_TABLE`: `503`, `"status":"degraded"` |
+| Tests + coverage gate | `cd app && npm run test:coverage` | **11 files / 86 tests pass**; 84.3% statements, 87.16% branches, 95.45% functions, 84.3% lines: every configured threshold met, exit 0 |
+| Build | `cd app && npm run build`, then `cp -r .next/static .next/standalone/.next/static` and `cp -r public .next/standalone/public`, then `HOSTNAME=0.0.0.0 node .next/standalone/server.js` | success; route table lists `ƒ /` and `ƒ /api/health` |
+| Health endpoint | `npm run build`, `cp -r .next/static .next/standalone/.next/static`, `cp -r public .next/standalone/public`, `HOSTNAME=0.0.0.0 node .next/standalone/server.js`, then `curl -i localhost:3000/api/health` | `200`, `Cache-Control: no-store`, `"status":"ok"`, `"env":"dev"`, `checks.database` present; with `DATA_BACKEND=dynamodb` and an empty `TODO_TABLE`: `503`, `"status":"degraded"` |
 | Seeded rows render | `curl -s localhost:3000/ \| grep -o 'data-done=' \| wc -l` | `3` |
-| Todo UI | browser against `next start` | create → toggle → delete reflect immediately; a reload shows the current list, and restarting the server resets to the 3 seeds (in-memory, process-level store by design) |
+| Todo UI | browser against the standalone server (`HOSTNAME=0.0.0.0 node .next/standalone/server.js`) after copying `.next/static` and `public` into `.next/standalone` | create → toggle → delete reflect immediately; a reload shows the current list, and restarting the server resets to the 3 seeds (in-memory, process-level store by design) |
 | Terraform | `terraform -chdir=terraform init -backend=false -input=false` → `fmt -check -recursive` → `validate` | `fmt` prints nothing; `validate` prints `Success! The configuration is valid.`; `terraform/bootstrap` validates too |
 | User-data shell | `bash -n terraform/user-data/*.sh` | passes for `jenkins-master.sh` and `jenkins-slave.sh` |
 | Pipeline syntax | `POST /pipeline-model-converter/validate` on a local controller (Jenkins 2.568.1, same plugin list) | `Jenkinsfile successfully validated.` |
 | Jenkins as code | boot a local controller with `jenkins/casc/jenkins.yaml` | import applies with no errors; the three jobs exist; `REBUILD` default `true` for dev, `false` for staging; anonymous `POST /job/flowharbor-dev/build` → `403`, admin → `201` |
-| CI install | `npm ci --ignore-scripts` on a clean checkout | typecheck clean, 11 files / 77 tests pass, thresholds met — install scripts are skipped and nothing needs them |
-| IaC misconfiguration scan | `.github/workflows/terraform.yml` (runs on `main`) | green on `main` at `e88a929` (2026-09-26), Trivy `v0.74.0`: `trivy config --severity HIGH,CRITICAL --exit-code 1` over the repo root. The first real run reported **6** findings — one public ALB (`AWS-0053`) and five port-scoped egress rules (`AWS-0104`) — both ids suppressed in `.trivyignore` with written justifications. The gate is still armed: the same scan with an empty ignore file exits `1`. `fmt`, `init` and `validate` pass in the same run |
+| CI install | `npm ci --ignore-scripts` on a clean checkout | typecheck clean, 11 files / 86 tests pass, thresholds met: install scripts are skipped and nothing needs them |
+| IaC misconfiguration scan | `.github/workflows/terraform.yml` (runs on `main`) | green on `main` at `e88a929` (2026-09-26), Trivy `v0.74.0`: `trivy config --severity HIGH,CRITICAL --exit-code 1` over the repo root. The first real run reported **6** findings: one public ALB (`AWS-0053`) and five port-scoped egress rules (`AWS-0104`); both ids suppressed in `.trivyignore` with written justifications. The gate is still armed: the same scan with an empty ignore file exits `1`. `fmt`, `init` and `validate` pass in the same run |
 
 Provider is `hashicorp/aws 5.100.0`, pinned by the committed
 `terraform/.terraform.lock.hcl` (see the note at `.gitignore:4`).
@@ -62,15 +62,15 @@ those versions."*
 | `Jenkinsfile` | The delivery story: 7 stages, every gate, rollback, SNS notification |
 | `app/` | Next.js 16.3.5 / React 19 / TS 5.9.3, `output: "standalone"` (`app/next.config.js:37`), security headers on every response |
 | `app/src/lib/` | Runtime-config parser/escaper, health payload, `cn()` |
-| `app/src/lib/todos/` | The todo data layer: `types`, `validate`, `memory`, `dynamodb`, `repository` — in-memory locally, DynamoDB in ECS |
+| `app/src/lib/todos/` | The todo data layer: `types`, `validate`, `memory`, `dynamodb`, `repository`: in-memory locally, DynamoDB in ECS |
 | `app/src/app/` | `page.tsx`, `todos/actions.ts` (server actions at `app/src/app/todos/actions.ts:9`, `:21`, `:34`), `api/health/route.ts` (200/503, 2 s DB timeout, `no-store`) |
 | `app/src/components/` | Todo panel, runtime badges, particle field, and the four `ui/` primitives |
-| `app/entrypoint.sh` | Boot-time `runtime-config.js` generation — `RUNTIME_CONFIG_DIR` (`app/entrypoint.sh:15`) makes the output dir overridable, `FLOWHARBOR_SKIP_EXEC=1` (`app/entrypoint.sh:57`) makes it testable |
+| `app/entrypoint.sh` | Boot-time `runtime-config.js` generation: `RUNTIME_CONFIG_DIR` (`app/entrypoint.sh:15`) makes the output dir overridable, `FLOWHARBOR_SKIP_EXEC=1` (`app/entrypoint.sh:57`) makes it testable |
 | `app/tests/` | `entrypoint.test.ts` runs the real `entrypoint.sh` in a temp dir and asserts the boot-config escaping contract |
 | `app/Dockerfile` | Two digest-pinned stages, non-root `USER node`, read-only-rootfs friendly, container `HEALTHCHECK` |
 | `.github/workflows/` | `ci.yml` (lint + typecheck + coverage on Node 22 and 24, lcov artifact), `terraform.yml` (`fmt -check -recursive`, `init -backend=false`, `validate`, `trivy config` misconfiguration scan), `codeql.yml` (push/PR + weekly cron, `security-extended`) |
 | `.github/dependabot.yml` | 4 ecosystems (npm in 2 groups, docker, github-actions, terraform), weekly Monday 09:00 UTC, limit 5 |
-| `.trivyignore` | Two check ids with written justifications: `AWS-0053` (the ALB is deliberately internet-facing behind WAF) and `AWS-0104` (five tcp/80-443 egress rules reaching dynamic AWS endpoints and package registries). Severity and `exit-code` stay strict — an empty ignore file still fails the scan |
+| `.trivyignore` | Two check ids with written justifications: `AWS-0053` (the ALB is deliberately internet-facing behind WAF) and `AWS-0104` (five tcp/80-443 egress rules reaching dynamic AWS endpoints and package registries). Severity and `exit-code` stay strict: an empty ignore file still fails the scan |
 | `jenkins/casc/jenkins.yaml` | Configuration-as-Code: security realm, matrix authorization, `numExecutors: 0`, Job DSL import (`jenkins/casc/jenkins.yaml:84`) |
 | `terraform/main.tf` | Root: 16 modules in dependency order, provider `default_tags` (`terraform/main.tf:39`), cost budget |
 | `terraform/modules/` | `vpc`, `security-groups`, `iam`, `ecr`, `acm`, `alb`, `waf`, `ecs`, `cloudfront`, `route53`, `observability-logging`, `jenkins-master`, `jenkins-slave`, `dynamodb`, `monitoring`, `governance` |
@@ -82,7 +82,7 @@ those versions."*
 | `terraform/user-data/flowharbor-jobs.groovy` | Terraform-rendered Job DSL: the three jobs and their parameter defaults (`terraform/user-data/flowharbor-jobs.groovy:26`) |
 | `terraform/user-data/jenkins-slave.sh` | Agent bootstrap incl. Node 22 via NodeSource, asserted with `node --version` (`terraform/user-data/jenkins-slave.sh:226`) |
 | `cloudfrontctl.sh`, `SECURITY.md`, `LICENSE` | `status`/`add`/`remove`/`plan`/`apply` for the CloudFront toggle; security policy; MIT |
-| `docs/` | Long-form documentation set: architecture, threat model, ADRs, operations runbook, cost model, demo script — linked from §10 |
+| `docs/` | Long-form documentation set: architecture, threat model, ADRs, operations runbook, cost model, demo script, linked from §10 |
 
 ---
 
@@ -96,7 +96,7 @@ The environment comes from the job name, not from a parameter
 |---|---|---|
 | 1 | `Checkout Tag` (`Jenkinsfile:182`) | environment allowlist, semver validation, tag → 40-char SHA, signature probe, `git clean -fdx`, author sanitisation |
 | 2 | `Verify` (`Jenkinsfile:246`) | `npm ci --ignore-scripts` + lint + typecheck + coverage on the agent, then a CycloneDX SBOM archived as an artifact (`Jenkinsfile:254`) |
-| 3 | `Build` (`Jenkinsfile:266`) | `npm audit --audit-level=high` (`Jenkinsfile:281`), ECR URL allowlist, `docker build` tagged with the git tag — never `:latest` |
+| 3 | `Build` (`Jenkinsfile:266`) | `npm audit --audit-level=high` (`Jenkinsfile:281`), ECR URL allowlist, `docker build` tagged with the git tag, never `:latest` |
 | 4 | `Push to ECR` (`Jenkinsfile:300`) | ECR login, push, resolve digest, cross-check `RepoDigests`, then the scan gate |
 | 5 | `Resolve Release` (`Jenkinsfile:352`) | runs **only** when `REBUILD=false`: resolve the existing image for the tag, validate the digest, re-run the scan gate independently |
 | 6 | `Approval` (`Jenkinsfile:400`) | production only, `input` restricted to `release-managers,admin` (`Jenkinsfile:406`) |
@@ -137,7 +137,7 @@ sequenceDiagram
 | Dependency audit | `npm audit --audit-level=high` exits non-zero | `Jenkinsfile:281` |
 | Image exists for promotion | no image for the tag in ECR, or a digest that is not `sha256:<64 hex>` | `Jenkinsfile:373`, `Jenkinsfile:376` |
 | ECR scan completed | `scanStatus` never reaches `COMPLETE` in 5 min → refuses to deploy an unscanned image. No `\|\| true` on this path | `Jenkinsfile:99` |
-| ECR scan findings present | response has no `findingSeverityCounts` key at all — an empty result is **not** a pass | `Jenkinsfile:111` |
+| ECR scan findings present | response has no `findingSeverityCounts` key at all: an empty result is **not** a pass | `Jenkinsfile:111` |
 | ECR scan severity | `CRITICAL > 0` | `Jenkinsfile:116` |
 | Digest pinning | image about to be registered does not contain `@sha256:` | `Jenkinsfile:580` |
 | Staging promotion chain | image in the `flowharbor-staging` task definition differs from the one being deployed to prod | `Jenkinsfile:594` |
@@ -150,7 +150,7 @@ sequenceDiagram
 No delivery gate swallows an error. The ECR scan path contains no `|| true` at
 all, and `grep -c '|| true' Jenkinsfile` returns exactly `3`: a comment at
 `Jenkinsfile:79` that records the old fail-open wait, the signature probe at
-`Jenkinsfile:212` (which only captures the verifier's output — the gate is the
+`Jenkinsfile:212` (which only captures the verifier's output; the gate is the
 `error` at `Jenkinsfile:216`), and the best-effort `shred -u` of a temp
 task-definition file at `Jenkinsfile:722`, which runs with `returnStatus: true`
 and whose result never lets a deploy proceed. A fourth would mean someone added
@@ -198,15 +198,15 @@ npm run build
 npm run sbom        # CycloneDX 1.6, dev dependencies omitted
 ```
 
-- **11 test files, 77 test cases**, covering runtime-config parsing and
+- **11 test files, 86 test cases**, covering runtime-config parsing and
   escaping, the `entrypoint.sh` boot-config shell contract, the in-memory and
   DynamoDB repositories, the health payload and route, the server actions, and
   the todo UI.
 - **Coverage thresholds are enforced, not decorative**
   (`app/vitest.config.ts:31`): global 70% lines / 70% functions / 70%
   statements / 60% branches, and `src/lib/**` at 90/90/90/85
-  (`app/vitest.config.ts:36`) — the run fails if any of them is missed. Last
-  recorded run: 88.33% statements, 86.93% branches, 97.5% functions.
+  (`app/vitest.config.ts:36`); the run fails if any of them is missed. Last
+  recorded run: 84.3% statements, 87.16% branches, 95.45% functions.
 - **`entrypoint.sh` is tested as a program, not as a string.**
   `app/tests/entrypoint.test.ts` runs it with `RUNTIME_CONFIG_DIR` and
   `FLOWHARBOR_SKIP_EXEC=1`, asserting an injected newline cannot split the
@@ -225,6 +225,8 @@ terraform -chdir=terraform init -backend=false -input=false && terraform -chdir=
 docker run --rm -e JAVA_OPTS=-Djenkins.install.runSetupWizard=false jenkins/jenkins:2.568.1-jdk21   # then POST the Jenkinsfile to /pipeline-model-converter/validate
 ```
 
+To run the built app locally, use the standalone output instead of `next start`, run from `app/`: `npm run build`, then `cp -r .next/static .next/standalone/.next/static`, `cp -r public .next/standalone/public`, then `HOSTNAME=0.0.0.0 node .next/standalone/server.js`. `next start` warns that the build is standalone, and the container runs the standalone server anyway.
+
 **You will see:** the app on `localhost:3000` with a working todo list (3
 seeds, create/toggle/delete, health at `/api/health`), a green quality suite, a
 validated Terraform configuration, and a Jenkinsfile that passes Jenkins' own
@@ -232,7 +234,7 @@ declarative linter.
 
 **You will not see:** any AWS resource, any deployed endpoint, live WAF blocks,
 alarm delivery, DynamoDB behaviour under failure, or a real deploy.
-`terraform plan` is deliberately not part of offline verification — the
+`terraform plan` is deliberately not part of offline verification: the
 availability-zone data source needs credentials; the runbook documents it for
 the operator instead.
 
@@ -242,14 +244,14 @@ the operator instead.
 
 | This repo proves | This repo cannot prove |
 |---|---|
-| The app builds, lints, typechecks, and its 77 tests pass with enforced coverage thresholds | Anything about a running deployment |
+| The app builds, lints, typechecks, and its 86 tests pass with enforced coverage thresholds | Anything about a running deployment |
 | The Jenkinsfile is valid declarative pipeline syntax on Jenkins 2.568.1 with the shipped plugin list | That any build was ever triggered or succeeded on a real controller |
-| JCasC imports cleanly, the three jobs exist, and matrix authorization denies anonymous `Job/Build` (403) | That branch protection, rulesets, secret scanning, or push protection are enabled — those are repository settings, not code |
+| JCasC imports cleanly, the three jobs exist, and matrix authorization denies anonymous `Job/Build` (403) | That branch protection, rulesets, secret scanning, or push protection are enabled: those are repository settings, not code |
 | The Terraform configuration is `fmt`-clean and `validate`-clean with `-backend=false` | Actual IAM role membership in a real account, or that any policy is attached to anything |
 | User-data scripts are syntactically valid, and the Job DSL copy in `jenkins-master.sh` is byte-identical to `flowharbor-jobs.groovy` | Live DNS, ACM issuance, or that `flowharbor.in` and friends resolve or serve this app |
 | Every gate in §4 is present in the pipeline source at the cited line | Live WAF blocks, live alarm/SNS delivery, DynamoDB behaviour under failure |
 | The misconfiguration scan runs on every push and pull request, fails on HIGH/CRITICAL, and its six current findings are triaged on the record | That the two suppressed ids stay justified as the architecture changes, or that the pinned check bundle still covers this stack's surface. Both are re-asserted only by a human reading `.trivyignore`, and a bare id suppresses that check everywhere, including occurrences that do not exist yet |
-| The provider is pinned to `hashicorp/aws 5.100.0` by a committed lock file | Measured monthly cost — the cost model is a labelled estimate with a measurement command, not a bill |
+| The provider is pinned to `hashicorp/aws 5.100.0` by a committed lock file | Measured monthly cost: the cost model is a labelled estimate with a measurement command, not a bill |
 | Deploys use a digest, never a mutable tag, and a rollback path exists in source | ECS task-definition revision history, uptime, throughput, or any SLO |
 
 Deviations from the original plan, decided on evidence:
@@ -257,7 +259,7 @@ Deviations from the original plan, decided on evidence:
 | Deviation | Evidence |
 |---|---|
 | `timestamper` added to the plugin list | The pipeline calls `timestamps()`; the linter rejected it otherwise, so the shipped pipeline could never have run on the shipped plugin list |
-| `matrix-auth` Global Matrix instead of role-strategy | role-strategy 3.x exposes no JCasC symbol for `authorizationStrategy`; `roleBased` failed to configure. `Job/Input/Proceed` does not exist as a permission — the prod gate is the `input` submitter list plus `Job/Build` (`jenkins/casc/jenkins.yaml:51`) |
+| `matrix-auth` Global Matrix instead of role-strategy | role-strategy 3.x exposes no JCasC symbol for `authorizationStrategy`; `roleBased` failed to configure. `Job/Input/Proceed` does not exist as a permission: the prod gate is the `input` submitter list plus `Job/Build` (`jenkins/casc/jenkins.yaml:51`) |
 | No seed job | `jobs: - file:` creates the three jobs at import time, which is what `numExecutors: 0` demands; `jenkins-master.sh` asserts all three exist and exits 1 otherwise (`terraform/user-data/jenkins-master.sh:347`) |
 | Budget uses `limit_amount`/`limit_unit` + a `notification` block | `limit` is gone from the resource and `aws_budgets_budget_action` needs an execution role and cannot send email |
 | Security Hub subscribes the Foundational standard by ARN | `enable_default_security_controls` and `data "aws_securityhub_standards"` do not exist on provider 5.x |
@@ -275,11 +277,11 @@ Deviations from the original plan, decided on evidence:
 - **Local Terraform state by default** so a clone validates with zero AWS
   access. Remote state is a documented path (`terraform/bootstrap/`), not the
   default.
-- **Manual triggers only** — no webhooks, no GitOps. Releases are auditable;
+- **Manual triggers only**: no webhooks, no GitOps. Releases are auditable;
   velocity is not the goal.
 - **The todo app has no authentication.** Anyone who can reach it can read and
-  write the list. The security story here is the edge and the delivery path —
-  WAF allowlist, digest pinning, IAM scoping — not the app's own access control.
+  write the list. The security story here is the edge and the delivery path (WAF allowlist, digest pinning, IAM scoping),
+  not the app's own access control.
   `docs/threat-model.md` scopes what adding auth would require.
 - **In-memory backend locally.** `npm run dev` works with zero AWS. The store
   is a process-level singleton, so a page reload shows the current list and only
