@@ -15,7 +15,7 @@ that cannot be pointed at is not listed as one.
 | Component | Supported | Source of truth |
 |---|---|---|
 | `main` / latest semver tag | yes | releases are cut by tagging; a deployable tag must match the semver pattern at `Jenkinsfile:199` |
-| Older tags | no — redeploy the newest tag | — |
+| Older tags | no; redeploy the newest tag | n/a |
 | `next` | `16.3.5` (exact pin, not a range) | `app/package.json:27` |
 | `react` / `react-dom` | `^19.3.0` | `app/package.json:28` |
 | `typescript` | `5.9.3` | `app/package.json:51` |
@@ -75,7 +75,7 @@ path:
 | Scan must complete | `Jenkinsfile:99` | Ten attempts at 30 s. An image whose scan never reaches `COMPLETE` is refused, not assumed clean |
 | Findings must be present | `Jenkinsfile:111` | A response with no `findingSeverityCounts` key at all is an **error**, never "zero findings" |
 | Zero CRITICAL | `Jenkinsfile:114`, `Jenkinsfile:116` | Any CRITICAL count fails the build |
-| Re-gated on promotion | `Jenkinsfile:387` | The promotion path pushed nothing, so it calls the same gate independently — a promotion cannot skip the scan |
+| Re-gated on promotion | `Jenkinsfile:387` | The promotion path pushed nothing, so it calls the same gate independently; a promotion cannot skip the scan |
 
 `scan_on_push` is enabled at `terraform/modules/ecr/main.tf:27`, so the scan
 starts on push rather than waiting for the pipeline to ask.
@@ -83,7 +83,7 @@ starts on push rather than waiting for the pipeline to ask.
 There is no `|| true` anywhere on this path. Across the whole `Jenkinsfile`,
 `grep -c '|| true'` returns exactly `3`: a comment at `Jenkinsfile:79` that
 records the fail-open wait this gate replaced, the signature probe at
-`Jenkinsfile:212` (which only captures the verifier's output — the gate itself
+`Jenkinsfile:212` (which only captures the verifier's output; the gate itself
 is the `error` at `Jenkinsfile:216`), and the best-effort `shred` at
 `Jenkinsfile:722`.
 
@@ -132,11 +132,11 @@ commit is not GPG-signed.
 | Matrix authorization | `jenkins/casc/jenkins.yaml:51` | `matrix-auth` Global Matrix. `anonymous` gets `Overall/Read` only; `developer` and `release-managers` additionally get `Job/Read` + `Job/Build`; the admin gets `Overall/Administer` |
 | Remoting channel | `jenkins/casc/jenkins.yaml:73` | `remotingSecurity` is enabled, so the agent↔controller channel is not open to unauthenticated peers |
 | Signup disabled | `jenkins/casc/jenkins.yaml:46` | `allowsSignup: false` |
-| JCasC is fail-closed | `jenkins/casc/jenkins.yaml:39` | `mode: EXCLUSIVE` — a malformed policy file aborts the controller boot rather than silently degrading to a weaker default |
+| JCasC is fail-closed | `jenkins/casc/jenkins.yaml:39` | `mode: EXCLUSIVE`: a malformed policy file aborts the controller boot rather than silently degrading to a weaker default |
 | Bootstrap asserts its own work | `terraform/user-data/jenkins-master.sh:347` | The bootstrap verifies all three jobs exist and exits non-zero otherwise, so a half-applied controller cannot serve a weakened policy |
 | Production approval | `Jenkinsfile:400`, `Jenkinsfile:406` | The `Approval` stage runs only for `prod` and names `release-managers,admin` as the accounts allowed to proceed. The submitter list is a list of accounts, not a permission; reachability is governed by the matrix |
 | Separate CI and workload identities | `terraform/modules/iam/main.tf:555` | The ECS task role and the Jenkins agent role are distinct. The controller running no builds means a workload compromise does not yield the CI credentials |
-| Scoped task permissions | `terraform/modules/iam/main.tf:555` | Seven DynamoDB item actions scoped to the todo table and its indexes — no table-wide or account-wide grants |
+| Scoped task permissions | `terraform/modules/iam/main.tf:555` | Seven DynamoDB item actions scoped to the todo table and its indexes: no table-wide or account-wide grants |
 | Scoped notification grant | `terraform/modules/iam/main.tf:372` | `sns:Publish` on the single alerts topic, not `*` |
 | Scoped secret writes | `terraform/modules/iam/main.tf:356` | `ssm:PutParameter` for the agent is scoped to the `/flowharbor/*` path rather than granted globally |
 | Security groups by tier | `terraform/modules/security-groups/main.tf` | Separate groups for ALB, controller, agent, and tasks, with the task group egress-only toward the data tier |
@@ -163,11 +163,11 @@ Terraform sets it on every service and the pipeline asserts it survived:
 |---|---|---|
 | Runs as non-root `node` | `terraform/modules/ecs/main.tf:46` | `Jenkinsfile:742` |
 | Read-only root filesystem | `terraform/modules/ecs/main.tf:47` | `Jenkinsfile:743` |
-| Never privileged | `terraform/modules/ecs/main.tf:48` | — (asserted by construction in Terraform) |
+| Never privileged | `terraform/modules/ecs/main.tf:48` | n/a (asserted by construction in Terraform) |
 | Container health check | `terraform/modules/ecs/main.tf:52` | `Jenkinsfile:744` |
 | Writable `/tmp` and `/app/public` only | `app/entrypoint.sh:6` | `Jenkinsfile:745`, `Jenkinsfile:746` |
-| Unprivileged port 3000 | `app/Dockerfile:14`, `app/Dockerfile:22` | — |
-| Digest-pinned base image | `app/Dockerfile:1`, `app/Dockerfile:10` | — |
+| Unprivileged port 3000 | `app/Dockerfile:14`, `app/Dockerfile:22` | n/a |
+| Digest-pinned base image | `app/Dockerfile:1`, `app/Dockerfile:10` | n/a |
 
 ---
 
@@ -182,12 +182,12 @@ tested:
 | Id validation | `app/src/lib/todos/validate.ts:3` | Strict `^[A-Za-z0-9-]{1,64}$` before any repository call |
 | Every action validates | `app/src/app/todos/actions.ts:9`, `:21`, `:34` | `createTodo`, `toggleTodo`, and `deleteTodo` each parse their input first |
 | Runtime-config escaping | `app/entrypoint.sh:36`, `app/src/lib/runtime-config.ts:26` | Boot config is serialized with `JSON.stringify` and `<`, `>`, U+2028, and U+2029 escaped, so `</script>` cannot break out of an inline script |
-| Runtime-config URL safety | `app/entrypoint.sh:24`, `app/src/lib/runtime-config.ts:34` | URLs are parsed with `new URL`, restricted to `http:`/`https:`, and control characters rejected — a `javascript:` value degrades to `"#"` |
+| Runtime-config URL safety | `app/entrypoint.sh:24`, `app/src/lib/runtime-config.ts:34` | URLs are parsed with `new URL`, restricted to `http:`/`https:`, and control characters rejected; a `javascript:` value degrades to `"#"` |
 | Runtime-config size cap | `app/entrypoint.sh:51`, `app/src/lib/runtime-config.ts:19` | 8192-byte ceiling on the generated file, enforced on both the shell and TypeScript sides |
 | Conditional put | `app/src/lib/todos/dynamodb.ts` | A create uses a condition expression, so a create cannot overwrite an existing row |
 | Health endpoint | `app/src/app/api/health/route.ts:8`, `:33` | 2-second database timeout, returns 200 or 503, `Cache-Control: no-store` |
 
-The escaping contract is not asserted by inspection — it is tested by running
+The escaping contract is not asserted by inspection; it is tested by running
 the real `entrypoint.sh` as a program in a temp directory
 (`app/tests/entrypoint.test.ts`), with `RUNTIME_CONFIG_DIR`
 (`app/entrypoint.sh:15`) and `FLOWHARBOR_SKIP_EXEC=1`
@@ -236,33 +236,33 @@ None of the following live in this repository. They are GitHub account
 settings, and this repo cannot prove them. Check them yourself before relying
 on them.
 
-- [ ] **Branch protection for `main`** — `Settings → Branches → Branch
+- [ ] **Branch protection for `main`**: `Settings → Branches → Branch
   protection rules` (or `Settings → Rules → Rulesets`): require pull requests,
   require status checks `verify (node 22)` and `verify (node 24)`, require
   linear history, block force pushes and branch deletion.
-- [ ] **Tag ruleset** — `Settings → Rules → Rulesets`, a ruleset targeting
+- [ ] **Tag ruleset**: `Settings → Rules → Rulesets`, a ruleset targeting
   `refs/tags/*`: restrict creation, update, and deletion, and require signed
   commits. The pipeline's signature gate is the backstop, not the substitute
   (`Jenkinsfile:216`).
-- [ ] **Secret scanning** — `Settings → Code security → Secret scanning`:
+- [ ] **Secret scanning**: `Settings → Code security → Secret scanning`:
   enabled.
-- [ ] **Secret scanning push protection** — `Settings → Code security → Secret
+- [ ] **Secret scanning push protection**: `Settings → Code security → Secret
   protection → Push protection`, set to **Block**.
-- [ ] **Dependabot alerts** — `Settings → Code security → Dependabot alerts`:
+- [ ] **Dependabot alerts**: `Settings → Code security → Dependabot alerts`:
   enabled, so the configured Dependabot PRs are not the only signal.
-- [ ] **Code scanning** — `Settings → Code security → Code scanning`:
+- [ ] **Code scanning**: `Settings → Code security → Code scanning`:
   enabled, and confirm the CodeQL workflow (`.github/workflows/codeql.yml`)
   reports into it.
-- [ ] **Default branch and merge rules** — `Settings → General → Pull
+- [ ] **Default branch and merge rules**: `Settings → General → Pull
   Requests`: squash-merge only, delete head branches on merge.
-- [ ] **Two-factor authentication and least-privilege membership** —
+- [ ] **Two-factor authentication and least-privilege membership**:
   `Settings → Authentication security` (require 2FA) and `Organization →
   People` (no outside collaborators on this repo).
-- [ ] **Actions permissions** — `Settings → Actions → General`: consider
+- [ ] **Actions permissions**: `Settings → Actions → General`: consider
   restricting `GITHUB_TOKEN` to read-only by default. All three workflows
   already declare `permissions: contents: read`; the CodeQL job additionally
   needs `security-events: write` and already requests it.
-- [ ] **Jenkins is not publicly reachable** — `jenkins_allowed_ipv4_cidrs`
+- [ ] **Jenkins is not publicly reachable**: `jenkins_allowed_ipv4_cidrs`
   defaults to `[]`, i.e. deny-all (`terraform/variables.tf:106`). Populate it
   with real operator CIDRs, or you lock yourself out of your own controller.
 
@@ -280,8 +280,8 @@ data model**. Anyone who can reach the deployed endpoint can read, create,
 complete, and delete todos, and the list is global.
 
 This is deliberate. The security surface this repository demonstrates is the
-**delivery path and the edge** — WAF allowlist, digest-pinned promotion, scoped
-IAM, KMS encryption, fail-closed gates, automatic rollback — not the
+**delivery path and the edge** (WAF allowlist, digest-pinned promotion, scoped
+IAM, KMS encryption, fail-closed gates, automatic rollback), not the
 application's own access control. Adding a demo login would produce a *worse*
 artifact: an authentication system that looks real but is not, sitting in front
 of a genuine security posture.
@@ -311,7 +311,7 @@ contract, and CSRF protection. `docs/threat-model.md` scopes that in full.
 ### Known defect: CloudFront log delivery would be denied
 
 This is a bug, not a design choice, and it is recorded here rather than fixed
-because it only manifests when `enable_cloudfront = true` — the default is
+because it only manifests when `enable_cloudfront = true`: the default is
 `false`, so it cannot be observed without an AWS account.
 
 The CloudFront distribution configures standard access logging to the shared log
@@ -343,8 +343,8 @@ you observed, and a suggested fix if you have one. Do not open a public issue, a
 pull request, or a discussion for a report you have not yet confirmed as safe
 to disclose.
 
-Non-code security issues — GitHub repository settings, DNS, ACM, the live
-endpoints, or a running AWS account — are out of scope for this repository's
+Non-code security issues (GitHub repository settings, DNS, ACM, the live
+endpoints, or a running AWS account) are out of scope for this repository's
 source and belong with the account owner.
 
 ---
@@ -352,8 +352,8 @@ source and belong with the account owner.
 ## 9. What not to commit
 
 - `.env` and any `*.pem` or other key material
-- `terraform/terraform.tfvars` — gitignored at `.gitignore:8`
-- `*.tfstate`, `*.tfstate.backup`, and `.terraform/` — gitignored at
+- `terraform/terraform.tfvars`: gitignored at `.gitignore:8`
+- `*.tfstate`, `*.tfstate.backup`, and `.terraform/`: gitignored at
   `.gitignore:1`–`.gitignore:2`
 
 Two ignore entries are deliberate and should not be "cleaned up":

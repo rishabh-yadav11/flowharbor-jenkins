@@ -1,6 +1,6 @@
 # Operations
 
-Everything here assumes a fresh account in `ap-south-1`. Commands are written to be pasted as-is; the ones that touch AWS are marked, and none of them were executed as part of building this repository — only the offline verification commands were.
+Everything here assumes a fresh account in `ap-south-1`. Commands are written to be pasted as-is; the ones that touch AWS are marked, and none of them were executed as part of building this repository; only the offline verification commands were.
 
 ---
 
@@ -9,7 +9,7 @@ Everything here assumes a fresh account in `ap-south-1`. Commands are written to
 - **Terraform** >= 1.10 (`terraform/versions.tf`) and an AWS provider in the 5.x series; the committed `.terraform.lock.hcl` pins `hashicorp/aws 5.100.0`.
 - **AWS credentials** for the target account, and permission to create VPCs, IAM roles, ACM certificates (or DNS validation), EC2 instances, ECS, ECR, WAFv2, KMS, DynamoDB, CloudWatch, Config, Security Hub, Route 53 and Budgets.
 - **A real domain** with a Route 53 hosted zone, plus the ability to create the ACM validation records. The example values ship as `example.com` (`terraform/terraform.tfvars.example`).
-- **A GitHub repository** that this account can read, with `main` as the default branch — the Jenkins controller fetches its own configuration from `main` at boot (`jenkins/casc/jenkins.yaml:5`).
+- **A GitHub repository** that this account can read, with `main` as the default branch: the Jenkins controller fetches its own configuration from `main` at boot (`jenkins/casc/jenkins.yaml:5`).
 - **Node >= 22** if you intend to run the app or the local quality gate (`app/package.json`).
 - **A GPG-capable committer** if you want signed tags, because the pipeline refuses unsigned ones by default (`Jenkinsfile:216`).
 
@@ -19,7 +19,7 @@ Everything here assumes a fresh account in `ap-south-1`. Commands are written to
 
 The order is not stylistic; each step depends on the previous one existing.
 
-### 1. Push the JCasC file first — before any apply
+### 1. Push the JCasC file first, before any apply
 
 ```bash
 git push origin main      # must include jenkins/casc/jenkins.yaml
@@ -36,7 +36,7 @@ terraform -chdir=terraform/bootstrap init
 terraform -chdir=terraform/bootstrap apply
 ```
 
-This is a separate root module on purpose: the module whose state a bucket holds cannot also create that bucket (`terraform/backend.tf:14`). It creates the bucket with versioning, SSE-KMS on a dedicated CMK, public access fully blocked, a TLS-only policy, and a 90-day noncurrent-version lifecycle rule. Note the CMK ARN it prints — you need it in step 3.
+This is a separate root module on purpose: the module whose state a bucket holds cannot also create that bucket (`terraform/backend.tf:14`). It creates the bucket with versioning, SSE-KMS on a dedicated CMK, public access fully blocked, a TLS-only policy, and a 90-day noncurrent-version lifecycle rule. Note the CMK ARN it prints; you need it in step 3.
 
 ### 3. Move the root module onto S3 (optional)
 
@@ -62,7 +62,7 @@ Notes:
 - `github_repo` defaults to `rishabh-yadav11/flowharbor-jenkins` (`terraform/variables.tf:139`); override it if you forked.
 - `cloudfront_origin_verify_token` is **required** when `enable_cloudfront = true` and must be at least 32 characters. Generate with `openssl rand -hex 32` and pass it as `TF_VAR_cloudfront_origin_verify_token`, never in a committed tfvars.
 - `enable_cloudfront` defaults to `false` (`terraform/variables.tf:60`). Leave it false for a first apply: the edge ACL is in `us-east-1` and the origin-verify guard only exists when the distribution does.
-- `budget_alert_emails` defaults to `[]`, which means the budget exists and reports but notifies nobody. That is deliberate — add your own address.
+- `budget_alert_emails` defaults to `[]`, which means the budget exists and reports but notifies nobody. That is deliberate: add your own address.
 - `jenkins_allowed_ipv4_cidrs` gates the Jenkins host at the WAF. If you set it to a range you are not actually behind, you will lock yourself out; see the failure-modes table.
 - The Jenkins instances have `user_data_replace_on_change = true` (`terraform/modules/jenkins-master/main.tf:50`), so a change to the bootstrap script replaces the controller on the next apply.
 
@@ -102,15 +102,15 @@ What each stage does, in order: `Checkout Tag` → `Verify` (lint, typecheck, co
 
 ## Rollback runbook
 
-**Option 1 — redeploy the previous tag (preferred, use this):**
+**Option 1: redeploy the previous tag (preferred, use this):**
 
 ```bash
 git tag -a 1.3.9 -m "redeploy 1.3.9"    # only if the tag does not already exist
 ```
 
-Then run `flowharbor-dev` → `flowharbor-staging` → `flowharbor-prod` with `GIT_TAG=1.3.9`. Downgrades below the currently running version are refused (`Jenkinsfile:611`), so if prod is on 1.4.0 and you need to go back to 1.3.9 you will hit that gate — roll forward by deploying a fixed 1.4.1 instead, or use option 2.
+Then run `flowharbor-dev` → `flowharbor-staging` → `flowharbor-prod` with `GIT_TAG=1.3.9`. Downgrades below the currently running version are refused (`Jenkinsfile:611`), so if prod is on 1.4.0 and you need to go back to 1.3.9 you will hit that gate; roll forward by deploying a fixed 1.4.1 instead, or use option 2.
 
-**Option 2 — repoint the service by hand (the escape hatch):**
+**Option 2: repoint the service by hand (the escape hatch):**
 
 ```bash
 aws ecs update-service \
@@ -140,7 +140,7 @@ sudo systemctl restart jenkins
 sudo journalctl -u jenkins -f | grep -i "configuration import"
 ```
 
-A malformed or unreachable `jenkins.yaml` aborts the boot by design (`jenkins/casc/jenkins.yaml:39`, `EXCLUSIVE` mode) — the alternative is a controller running with a default policy, which is worse. After boot the bootstrap's own check re-runs on the next instance replacement; to verify manually:
+A malformed or unreachable `jenkins.yaml` aborts the boot by design (`jenkins/casc/jenkins.yaml:39`, `EXCLUSIVE` mode); the alternative is a controller running with a default policy, which is worse. After boot the bootstrap's own check re-runs on the next instance replacement; to verify manually:
 
 ```bash
 for e in dev staging prod; do
@@ -207,10 +207,10 @@ Each row is a real gate in `Jenkinsfile`; the grep line is the literal text the 
 | High-severity dependency | `npm audit` finding at high | `npm audit --audit-level=high` failed in `Build` | Update the dependency; the Dependabot PR is the usual route (`Jenkinsfile:281`) |
 | ECR repo validation | `REFUSING ECR op:` | The `ECR_REPOSITORY` credential is malformed or points somewhere unexpected | Re-store the credential from `terraform output ecr_repository_url` (`Jenkinsfile:42`, `Jenkinsfile:46`) |
 | ECR scan never completes | `ECR scan did not reach COMPLETE` | After 5 minutes the scan is still pending | Usually a large image or a scan queue backlog. Re-run; if it repeats, check scan status manually with `aws ecr describe-image-scan-findings` (`Jenkinsfile:100`) |
-| ECR scan response is incomplete | `ECR scan returned no findingSeverityCounts` | The scan finished but the response had no severity counts — treated as unknown, not as clean | Re-run the scan or check the image manually; do not disable the gate (`Jenkinsfile:112`) |
+| ECR scan response is incomplete | `ECR scan returned no findingSeverityCounts` | The scan finished but the response had no severity counts; treated as unknown, not as clean | Re-run the scan or check the image manually; do not disable the gate (`Jenkinsfile:112`) |
 | ECR scan found CRITICAL | `ECR scan found` | The image has at least one CRITICAL finding | Rebuild with patched dependencies; an override here is a real risk acceptance (`Jenkinsfile:116`) |
 | Digest not resolvable after push | `Failed to resolve digest` | The push succeeded but the digest could not be read back | Re-run; check `aws ecr describe-images` for the tag (`Jenkinsfile:318`) |
-| Local/remote digest mismatch | `Digest mismatch: local RepoDigests` | The pushed image is not the one just built | Treat as a serious signal — do not retry blindly; inspect the ECR repository (`Jenkinsfile:325`) |
+| Local/remote digest mismatch | `Digest mismatch: local RepoDigests` | The pushed image is not the one just built | Treat as a serious signal; do not retry blindly; inspect the ECR repository (`Jenkinsfile:325`) |
 | Promotion without a dev build | `No image for tag` | `REBUILD=false` but no image exists for that tag | Run `flowharbor-dev` with `REBUILD=true` first (`Jenkinsfile:374`) |
 | Malformed promoted digest | `malformed digest` | The digest from ECR did not match `sha256:[0-9a-f]{64}` | Investigate the ECR repository; do not force a deploy (`Jenkinsfile:377`) |
 | Production approval | `Abort` / the `input` waiting on screen | Waiting for a release manager, or nobody is one | Press Proceed as `release-managers`/`admin`, or create those accounts; the stage times out after 30 minutes (`Jenkinsfile:403`) |
@@ -221,5 +221,5 @@ Each row is a real gate in `Jenkinsfile`; the grep line is the literal text the 
 | Service never stabilises | `Waiter ServiceStable failed` | Tasks are not reaching a steady state after the update | Read the service events: `aws ecs describe-services --cluster flowharbor-cluster --services flowharbor-prod`; check the task stopped reason in CloudWatch under `/ecs/flowharbor-prod`. The pipeline attempts the rollback itself |
 | Rollback itself failed | `ROLLBACK FAILED` | The automatic repoint did not stabilise the service | Run the command the log prints, by hand, against the named revision (`Jenkinsfile:502`) |
 | Terraform lock/state error (infrastructure) | `Error acquiring the state lock` | A concurrent apply, or a lock left by a crashed run | Confirm nothing is running, then remove the lock object from the state bucket and re-run |
-| Trivy misconfiguration finding (PR) | the Trivy action's finding output | A HIGH/CRITICAL IaC finding | Fix it, or add a one-line justified entry to `.trivyignore` — never lower `severity` or set `exit-code: "0"` (`.github/workflows/terraform.yml:67`) |
-| WAF lockout of the Jenkins UI | HTTP 403 from the WAF on `jenkins.<domain>` | Your IP is not in `jenkins_allowed_ipv4_cidrs`, or the rate limit tripped | Widen `jenkins_allowed_ipv4_cidrs` in tfvars and apply. If you are fully locked out, the practical escape is to reach the controller over SSM Session Manager and edit the allowlist — there is no in-console bypass |
+| Trivy misconfiguration finding (PR) | the Trivy action's finding output | A HIGH/CRITICAL IaC finding | Fix it, or add a one-line justified entry to `.trivyignore`; never lower `severity` or set `exit-code: "0"` (`.github/workflows/terraform.yml:67`) |
+| WAF lockout of the Jenkins UI | HTTP 403 from the WAF on `jenkins.<domain>` | Your IP is not in `jenkins_allowed_ipv4_cidrs`, or the rate limit tripped | Widen `jenkins_allowed_ipv4_cidrs` in tfvars and apply. If you are fully locked out, the practical escape is to reach the controller over SSM Session Manager and edit the allowlist; there is no in-console bypass |
