@@ -1,6 +1,6 @@
 "use client"
 
-import { safeUrl, useRuntimeConfig } from "@/lib/runtime-config"
+import { isLocalBuild, safeUrl, useRuntimeConfig } from "@/lib/runtime-config"
 
 export function EnvValue() {
   const config = useRuntimeConfig()
@@ -10,12 +10,14 @@ export function EnvValue() {
 export function VersionValue() {
   const config = useRuntimeConfig()
   if (!config) return <>version unknown</>
+  if (isLocalBuild(config)) {
+    return <>local build (not built by CI)</>
+  }
   const url = safeUrl(config.PIPELINE_URL)
   if (!url || url === "#") {
     return (
       <>
-        v{config.VERSION} · build #{config.BUILD_NUMBER} · {config.GIT_BRANCH}@{config.GIT_COMMIT} ·{" "}
-        <span className="underline decoration-white/20 text-white/50">pipeline</span>
+        v{config.VERSION} · build #{config.BUILD_NUMBER} · {config.GIT_BRANCH}@{config.GIT_COMMIT}
       </>
     )
   }

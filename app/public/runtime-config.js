@@ -1,10 +1,10 @@
 window.__RUNTIME_CONFIG__ = {
-  ENV: "__ENV__",
-  VERSION: "__VERSION__",
-  BUILD_NUMBER: "__BUILD_NUMBER__",
-  GIT_COMMIT: "__GIT_COMMIT__",
-  GIT_BRANCH: "__GIT_BRANCH__",
-  GIT_AUTHOR: "__GIT_AUTHOR__",
-  TIMESTAMP: "__TIMESTAMP__",
-  PIPELINE_URL: "__PIPELINE_URL__",
+  ENV: "dev",
+  VERSION: "local",
+  BUILD_NUMBER: "0",
+  GIT_COMMIT: "local",
+  GIT_BRANCH: "local",
+  GIT_AUTHOR: "local",
+  TIMESTAMP: "local",
+  PIPELINE_URL: "",
 }

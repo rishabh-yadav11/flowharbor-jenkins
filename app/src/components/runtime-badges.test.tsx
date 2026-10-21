@@ -40,6 +40,34 @@ describe("VersionValue", () => {
     expect(screen.getByText(/v1\.2\.3/)).toBeInTheDocument()
     expect(screen.getByText(/main@abc1234/)).toBeInTheDocument()
     expect(screen.queryByRole("link")).not.toBeInTheDocument()
+    expect(screen.queryByText(/pipeline/)).not.toBeInTheDocument()
+  })
+
+  it("renders the local-build message for placeholder values", () => {
+    w.__RUNTIME_CONFIG__ = {
+      VERSION: "__VERSION__",
+      BUILD_NUMBER: "__BUILD_NUMBER__",
+      GIT_COMMIT: "__GIT_COMMIT__",
+      GIT_BRANCH: "__GIT_BRANCH__",
+    }
+    render(<VersionValue />)
+    expect(screen.getByText(/local build \(not built by CI\)/)).toBeInTheDocument()
+    expect(screen.queryByText(/v/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/build #/)).not.toBeInTheDocument()
+    expect(screen.queryByRole("link")).not.toBeInTheDocument()
+  })
+
+  it('renders the local-build message for VERSION "local"', () => {
+    w.__RUNTIME_CONFIG__ = {
+      VERSION: "local",
+      BUILD_NUMBER: "0",
+      GIT_COMMIT: "local",
+      GIT_BRANCH: "local",
+    }
+    render(<VersionValue />)
+    expect(screen.getByText(/local build \(not built by CI\)/)).toBeInTheDocument()
+    expect(screen.queryByText(/build #/)).not.toBeInTheDocument()
+    expect(screen.queryByRole("link")).not.toBeInTheDocument()
   })
 
   it("links to the pipeline when the URL survives validation", () => {

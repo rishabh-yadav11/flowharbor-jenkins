@@ -20,6 +20,20 @@ const MAX_TOTAL_LEN = 8192
 
 const ALLOWED_ENVS = new Set(["dev", "staging", "prod"])
 
+export function isPlaceholderValue(v: unknown): boolean {
+  return typeof v === "string" && /^__.*__$/.test(v)
+}
+
+export function isLocalBuild(cfg: RuntimeConfig): boolean {
+  return (
+    isPlaceholderValue(cfg.VERSION) ||
+    isPlaceholderValue(cfg.BUILD_NUMBER) ||
+    isPlaceholderValue(cfg.GIT_COMMIT) ||
+    isPlaceholderValue(cfg.GIT_BRANCH) ||
+    cfg.VERSION === "local"
+  )
+}
+
 // Serialize for embedding in <script> (external or inlined). JSON.stringify
 // does NOT escape `<`, `>`, U+2028/29, so `</script>` would break out if the
 // file is ever inlined. Escape to \u003c/\u003e/\u2028/\u2029 (issue #20).

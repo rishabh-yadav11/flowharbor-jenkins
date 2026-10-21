@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { parseRuntimeConfig, safeUrl, serializeRuntimeConfig } from "@/lib/runtime-config"
+import {
+  isLocalBuild,
+  isPlaceholderValue,
+  parseRuntimeConfig,
+  safeUrl,
+  serializeRuntimeConfig,
+} from "@/lib/runtime-config"
 
 const base = {
   ENV: "dev",
@@ -82,5 +88,41 @@ describe("parseRuntimeConfig", () => {
   it("freezes the returned config", () => {
     const cfg = parseRuntimeConfig({})
     expect(Object.isFrozen(cfg)).toBe(true)
+  })
+})
+
+describe("isPlaceholderValue", () => {
+  it('recognises "__KEY__" style placeholders', () => {
+    expect(isPlaceholderValue("__VERSION__")).toBe(true)
+  })
+
+  it("rejects real values", () => {
+    expect(isPlaceholderValue("1.2.3")).toBe(false)
+  })
+
+  it("rejects non-strings", () => {
+    expect(isPlaceholderValue(null)).toBe(false)
+    expect(isPlaceholderValue(undefined)).toBe(false)
+    expect(isPlaceholderValue(42)).toBe(false)
+  })
+})
+
+describe("isLocalBuild", () => {
+  it("is true when VERSION is a placeholder", () => {
+    expect(isLocalBuild({ ...base, VERSION: "__VERSION__" })).toBe(true)
+  })
+
+  it('is true when VERSION is "local"', () => {
+    expect(isLocalBuild({ ...base, VERSION: "local" })).toBe(true)
+  })
+
+  it("is true when any build field is a placeholder", () => {
+    expect(isLocalBuild({ ...base, BUILD_NUMBER: "__BUILD_NUMBER__" })).toBe(true)
+    expect(isLocalBuild({ ...base, GIT_COMMIT: "__GIT_COMMIT__" })).toBe(true)
+    expect(isLocalBuild({ ...base, GIT_BRANCH: "__GIT_BRANCH__" })).toBe(true)
+  })
+
+  it("is false for a real config", () => {
+    expect(isLocalBuild(base)).toBe(false)
   })
 })
