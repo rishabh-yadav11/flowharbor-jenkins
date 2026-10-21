@@ -5,7 +5,7 @@ import "./globals.css"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "FlowHarbor — release pipeline demo",
+  title: "FlowHarbor: release pipeline demo",
   description:
     "A todo app shipped by a tag-driven Jenkins → ECR → ECS Fargate pipeline on AWS",
 }

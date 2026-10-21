@@ -11,7 +11,7 @@ export default async function Home() {
   const todos = await getRepository().list()
 
   return (
-    <main className="relative min-h-dvh overflow-hidden bg-[#05060f] text-white">
+    <main className="relative flex min-h-dvh flex-col overflow-hidden bg-[#05060f] text-white">
       <ParticleField />
 
       {/* Vignette + grain overlay for depth */}
@@ -25,35 +25,35 @@ export default async function Home() {
       />
 
       {/* Top bar with env badge */}
-      <div className="absolute inset-x-0 top-0 flex items-center justify-between p-5">
+      <div className="relative z-10 flex items-center justify-between p-5">
         <span className="text-sm font-semibold tracking-widest text-white/70 uppercase">
           FlowHarbor
         </span>
         <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-white/70 backdrop-blur-md">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
           env: <EnvValue />
         </span>
       </div>
 
       {/* Hero + the payload the pipeline actually ships */}
-      <div className="relative z-10 flex min-h-dvh flex-col items-center justify-center gap-8 px-6 text-center">
+      <div className="relative z-10 flex flex-1 flex-col items-center justify-center gap-8 px-6 py-4 text-center">
         <div>
-          <h1 className="bg-linear-to-br from-white via-indigo-200 to-indigo-400 bg-clip-text text-6xl font-black tracking-tight text-transparent sm:text-8xl">
+          <h1 className="bg-linear-to-br from-white via-indigo-200 to-indigo-400 bg-clip-text text-5xl font-black tracking-tight text-transparent sm:text-8xl">
             FlowHarbor
           </h1>
           <p className="mt-5 max-w-md text-base text-white/50 sm:text-lg">
-            Tag-driven delivery on AWS — this todo list is the payload.
+            Tag-driven delivery on AWS. This todo list is the payload.
           </p>
         </div>
         <TodoPanel initialTodos={todos} />
       </div>
 
       {/* Bottom metadata */}
-      <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 p-6 text-xs text-white/40">
+      <div className="relative z-10 flex flex-col items-center gap-2 px-6 pb-6 text-xs text-white/60">
         <p className="tabular-nums">
           <VersionValue />
         </p>
-        <p className="text-white/30">Click anywhere — the field follows you</p>
+        <p className="text-white/55">Move your cursor, and the field drifts with it.</p>
       </div>
     </main>
   )

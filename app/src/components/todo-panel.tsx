@@ -69,7 +69,7 @@ export function TodoPanel({ initialTodos }: { initialTodos: Todo[] }) {
             maxLength={120}
             placeholder="Add a todo…"
             aria-label="Todo title"
-            className="border-white/10 bg-white/5 text-white placeholder:text-white/30"
+            className="border-white/10 bg-white/5 text-white placeholder:text-white/60"
           />
           <Button type="submit" disabled={isSubmitting}>
             Add
@@ -94,7 +94,7 @@ export function TodoPanel({ initialTodos }: { initialTodos: Todo[] }) {
               data-done={todo.done}
               className={cn(
                 "flex items-center gap-3 rounded-md px-2 py-1 text-sm",
-                todo.done && "text-white/40 line-through"
+                todo.done && "text-white/60 line-through"
               )}
             >
               <Checkbox
