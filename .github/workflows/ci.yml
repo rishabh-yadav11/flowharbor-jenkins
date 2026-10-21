@@ -44,6 +44,10 @@ jobs:
         working-directory: app
         run: npm run typecheck
 
+      - name: Build
+        working-directory: app
+        run: npm run build
+
       - name: Test with coverage
         working-directory: app
         run: npm run test:coverage

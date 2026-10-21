@@ -14,12 +14,15 @@ const securityHeaders = [
   { key: "X-DNS-Prefetch-Control", value: "off" },
   // Content Security Policy. Next.js App Router injects an inline bootstrap
   // script for hydration, hence 'unsafe-inline' for script-src — this still
-  // blocks all remote/external script injection and eval().
+  // blocks all remote/external script injection. React 19 dev mode needs eval
+  // for HMR, so 'unsafe-eval' is confined to non-production builds.
   {
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline'",
+      process.env.NODE_ENV === "production"
+        ? "script-src 'self' 'unsafe-inline'"
+        : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "font-src 'self' data:",
